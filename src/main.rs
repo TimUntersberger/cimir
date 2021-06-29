@@ -5,20 +5,33 @@ use winit::{
 };
 
 use glium::{
-    Frame, glutin::ContextBuilder, implement_vertex, index::PrimitiveType, uniforms::EmptyUniforms,
-    Display, IndexBuffer, Program, Surface, VertexBuffer,
+    uniform, Rect, Frame, glutin::ContextBuilder, implement_vertex, index::PrimitiveType, uniforms::EmptyUniforms,
+    Display, IndexBuffer, Program, Surface, VertexBuffer, DrawParameters
 };
 
 const VERTEX_SHADER: &'static str = r#"
 #version 330 core
 layout (location = 0) in vec2 position; // the position variable has attribute position 0
 layout (location = 1) in vec3 color; // the position variable has attribute position 0
+
+uniform vec2 size;
+uniform bool is_percentage;
   
 out vec4 vertexColor; // specify a color output to the fragment shader
 
 void main()
 {
-    gl_Position = vec4(position, 1.0, 1.0);
+    float x, y;
+    if (!is_percentage) {
+        x = position.x * size.x;
+        y = position.y * size.y;
+        x = x - 1;
+        y = 1 - y;
+    } else {
+        x = position.x * 2 - 1;
+        y = 1 - position.y * 2;
+    }
+    gl_Position = vec4(x, y, 1.0, 1.0);
     vertexColor = vec4(color, 1.0);
 }
 "#;
@@ -69,18 +82,26 @@ struct Renderer<'a> {
     frame: Frame,
     display: &'a Display,
     program: &'a Program,
+    viewport: (f32, f32),
+    cursor: (f32, f32),
+    row_stack: Vec<f32>,
 }
 
 impl<'a> Renderer<'a> {
     pub fn new(display: &'a Display, program: &'a Program) -> Self {
+        let size = display.gl_window().window().inner_size();
+        let viewport = (size.width as f32, size.height as f32);
         Self {
             frame: display.draw(),
             display,
-            program
+            program,
+            viewport,
+            cursor: (0.0, 0.0),
+            row_stack: vec![]
         }
     }
 
-    fn draw_vertices(&mut self, vertices: &[Vertex]) {
+    fn draw_vertices(&mut self, vertices: &[Vertex], percentages: bool) {
         let vb = VertexBuffer::new(self.display, vertices).unwrap();
         let ib = IndexBuffer::new(
             self.display, 
@@ -88,30 +109,62 @@ impl<'a> Renderer<'a> {
             &(0..(vertices.len() as u16)).collect::<Vec<u16>>()
         ).unwrap();
 
-        self.frame.draw(&vb, &ib, &self.program, &EmptyUniforms, &Default::default())
+        let uniforms = uniform! { 
+            size: [1.0/self.viewport.0, 1.0/self.viewport.1],
+            is_percentage: percentages
+        };
+
+        self.frame.draw(&vb, &ib, &self.program, &uniforms, &Default::default())
             .unwrap();
     }
 
-    pub fn rectangle(&mut self, color: Color) {
+    pub fn row(&mut self, f: impl Fn(&mut Renderer) -> ()) {
+        self.row_stack.push(0.0);
+        f(self);
+        self.cursor.0 = 0.0;
+        self.cursor.1 += self.row_stack.pop().unwrap();
+    }
+
+    pub fn space(&mut self, size: f32) {
+        if !self.row_stack.is_empty() {
+            self.cursor.0 += size;
+        } else {
+            self.cursor.1 += size;
+        }
+    }
+
+    pub fn rectangle(&mut self, size: (f32, f32), color: Color) {
         let color = color.into();
+        let (width, height) = size;
+        let (x, y) = self.cursor;
+
         self.draw_vertices(&[
             Vertex {
-                position: [-0.5, -0.5],
+                position: [x, y],
                 color,
             },
             Vertex {
-                position: [-0.5, 0.5],
+                position: [x, y + height],
                 color,
             },
             Vertex {
-                position: [0.5, -0.5],
+                position: [x + width, y],
                 color,
             },
             Vertex {
-                position: [0.5, 0.5],
+                position: [x + width, y + height],
                 color,
             },
-        ])
+        ], false);
+
+        if let Some(val) = self.row_stack.iter_mut().last() {
+            self.cursor.0 += width;
+            if *val < height {
+                *val = height;
+            }
+        } else {
+            self.cursor.1 += height;
+        }
     }
 
     pub fn done(self) {
@@ -121,13 +174,23 @@ impl<'a> Renderer<'a> {
 
 trait Application {
     fn render(&mut self, renderer: &mut Renderer);
+    fn on_event(&mut self, _event: Event<()>) -> Option<ControlFlow> {
+        None
+    }
 }
 
 trait ApplicationWrapper {
     fn run(self);
+    fn call_render(&mut self, display: &Display, program: &Program);
 }
 
 impl<T: 'static> ApplicationWrapper for T where T: Application {
+    fn call_render(&mut self, display: &Display, program: &Program) {
+        let mut renderer = Renderer::new(display, program);
+        self.render(&mut renderer);
+        renderer.done();
+    }
+
     fn run(mut self) {
         let ev = EventLoop::new();
         let wb = WindowBuilder::new();
@@ -135,24 +198,24 @@ impl<T: 'static> ApplicationWrapper for T where T: Application {
         let display = Display::new(wb, cb, &ev).unwrap();
         let program = Program::from_source(&display, VERTEX_SHADER, FRAGMENT_SHADER, None).unwrap();
 
-        let mut renderer = Renderer::new(&display, &program);
-        self.render(&mut renderer);
-        renderer.done();
+        self.call_render(&display, &program);
 
         ev.run(move |event, _, control_flow| {
-            *control_flow = match event {
+            *control_flow = match &event {
                 Event::WindowEvent { event, .. } => match event {
                     WindowEvent::CloseRequested => ControlFlow::Exit,
                     WindowEvent::Resized(..) => {
-                        let mut renderer = Renderer::new(&display, &program);
-                        self.render(&mut renderer);
-                        renderer.done();
+                        self.call_render(&display, &program);
                         ControlFlow::Poll
                     }
                     _ => ControlFlow::Poll,
                 },
                 _ => ControlFlow::Poll,
             };
+
+            if let Some(cf) = self.on_event(event) {
+                *control_flow = cf;
+            }
         });
     }
 }
@@ -160,8 +223,30 @@ impl<T: 'static> ApplicationWrapper for T where T: Application {
 struct App;
 
 impl Application for App {
+    fn on_event(&mut self, event: Event<()>) -> Option<ControlFlow> {
+        dbg!(&event);
+        None
+    }
     fn render(&mut self, r: &mut Renderer) {
-        r.rectangle(Color::new(20, 250, 25));
+        let btn_size = (200.0, 100.0);
+
+        r.row(|r| {
+            r.rectangle(btn_size, Color::new(0, 200, 0));
+            r.space(10.0);
+            r.rectangle(btn_size, Color::new(0, 200, 0));
+            r.space(10.0);
+            r.rectangle(btn_size, Color::new(0, 200, 0));
+        });
+        r.space(10.0);
+        r.rectangle(btn_size, Color::new(0, 200, 0));
+        r.space(10.0);
+        r.row(|r| {
+            r.rectangle(btn_size, Color::new(0, 200, 0));
+            r.space(10.0);
+            r.rectangle(btn_size, Color::new(0, 200, 0));
+            r.space(10.0);
+            r.rectangle(btn_size, Color::new(0, 200, 0));
+        });
     }
 }
 
