@@ -27,10 +27,10 @@ void main()
 {
     float x, y;
     if (!is_percentage) {
-        x = position.x * size.x;
-        y = position.y * size.y;
-        x = x - 1;
-        y = 1 - y;
+        x = position.x / size.x;
+        y = position.y / size.y;
+        x = x * 2 - 1;
+        y = 1 - y * 2;
     } else {
         x = position.x * 2 - 1;
         y = 1 - position.y * 2;
@@ -213,8 +213,9 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         let (vb, ib) = self.setup_draw(vertices);
 
         let tex = Texture2d::empty(&self.display, 0, 0).unwrap();
+        let size = [self.viewport.0, self.viewport.1];
         let uniforms = uniform! { 
-            size: [1.0/self.viewport.0, 1.0/self.viewport.1],
+            size: size,
             is_percentage: percentages,
             use_texture: false,
             tex: &tex
@@ -238,7 +239,7 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         match self.textures.get(&texture_id).unwrap() {
             Texture::Image(tex) => {
                 let uniforms = uniform! { 
-                    size: [1.0/self.viewport.0, 1.0/self.viewport.1],
+                    size: [self.viewport.0 / 100.0, self.viewport.1 / 100.0],
                     is_percentage: false,
                     use_texture: true,
                     tex: tex
@@ -450,7 +451,7 @@ impl Application for App {
     }
 
     fn render(&mut self, r: &mut Renderer<Self::TextureId>) {
-        r.texture(TextureId::Moon, (800.0, 600.0));
+        r.rectangle((800.0, 600.0), Color::new(255, 255, 255));
     }
 }
 
