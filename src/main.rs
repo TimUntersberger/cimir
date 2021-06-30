@@ -5,21 +5,23 @@ use winit::{
 };
 
 use glium::{
-    uniform, Rect, Frame, glutin::ContextBuilder, implement_vertex, index::PrimitiveType, uniforms::EmptyUniforms,
+    texture::{Texture2d, RawImage2d, CompressedSrgbTexture2d}, uniform, Rect, Frame, glutin::ContextBuilder, implement_vertex, index::PrimitiveType, uniforms::EmptyUniforms,
     Display, IndexBuffer, Program, Surface, VertexBuffer, DrawParameters
 };
 
-use std::{convert::TryInto, collections::HashMap, time::{Duration, Instant}};
+use std::{hash::Hash, convert::TryInto, collections::HashMap, time::{Duration, Instant}};
 
 const VERTEX_SHADER: &'static str = r#"
 #version 330 core
 layout (location = 0) in vec2 position; // the position variable has attribute position 0
 layout (location = 1) in vec3 color; // the position variable has attribute position 0
+layout (location = 2) in vec2 tex_pos;
 
 uniform vec2 size;
 uniform bool is_percentage;
   
-out vec4 vertexColor; // specify a color output to the fragment shader
+out vec4 vertex_color;
+out vec2 vertex_tex_pos;
 
 void main()
 {
@@ -34,19 +36,28 @@ void main()
         y = 1 - position.y * 2;
     }
     gl_Position = vec4(x, y, 1.0, 1.0);
-    vertexColor = vec4(color, 1.0);
+    vertex_color = vec4(color, 1.0);
+    vertex_tex_pos = tex_pos;
 }
 "#;
 
 const FRAGMENT_SHADER: &'static str = r#"
 #version 330 core
 out vec4 FragColor;
+
+uniform sampler2D tex;
+uniform bool use_texture;
   
-in vec4 vertexColor; // the input variable from the vertex shader (same name and same type)  
+in vec4 vertex_color;
+in vec2 vertex_tex_pos;
 
 void main()
 {
-    FragColor = vertexColor;
+    if (use_texture) {
+        FragColor = texture(tex, vertex_tex_pos);
+    } else {
+        FragColor = vertex_color;
+    }
 } 
 "#;
 
@@ -54,10 +65,29 @@ void main()
 struct Vertex {
     position: [f32; 2],
     color: [f32; 3],
+    tex_pos: [f32; 2]
 }
 
-implement_vertex!(Vertex, position, color);
+implement_vertex!(Vertex, position, color, tex_pos);
 
+impl Vertex {
+    pub fn colored(color: Color, x: f32, y: f32) -> Self {
+        Self {
+            color: color.into(),
+            position: [x, y],
+            tex_pos: [0.0, 0.0]
+        }
+    }
+    pub fn textured(tex_pos: (f32, f32), x: f32, y: f32) -> Self {
+        Self {
+            position: [x, y],
+            color: [0.0, 0.0, 0.0],
+            tex_pos: [tex_pos.0, tex_pos.1]
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
 struct Color {
     r: u16,
     g: u16,
@@ -115,53 +145,127 @@ enum Layout {
     Col { width: f32, x: f32, y: f32 }
 }
 
-struct Renderer<'a> {
+enum Texture {
+    Image(CompressedSrgbTexture2d)
+}
+
+struct Renderer<TTextureId: Hash + Eq> {
+    /// this holds the current frame
     frame: Frame,
-    display: &'a Display,
-    program: &'a Program,
+    display: Display,
+    program: Program,
+    /// used for scaling the ui to the display
     viewport: (f32, f32),
     cursor: (f32, f32),
     layout_stack: Vec<Layout>,
-    animations: &'a mut HashMap<u32, Animation>
+    animations: HashMap<u32, Animation>,
+    textures: HashMap<TTextureId, Texture>
 }
 
-impl<'a> Renderer<'a> {
-    pub fn new(display: &'a Display, program: &'a Program, animations: &'a mut HashMap<u32, Animation>) -> Self {
-        let size = display.gl_window().window().inner_size();
-        let viewport = (size.width as f32, size.height as f32);
+impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
+    pub fn new(display: Display, program: Program) -> Self {
+        let mut frame = display.draw();
+        frame.set_finish().unwrap();
         Self {
-            frame: display.draw(),
+            frame,
             display,
             program,
-            viewport,
+            viewport: (0.0, 0.0),
             cursor: (0.0, 0.0),
             layout_stack: vec![Layout::Col { width: 0.0, x: 0.0, y: 0.0 }],
-            animations
+            animations: HashMap::new(),
+            textures: HashMap::new()
         }
     }
 
-    fn draw_vertices(&mut self, vertices: &[Vertex], percentages: bool) {
-        let vb = VertexBuffer::new(self.display, vertices).unwrap();
+    pub fn set_image(&mut self, id: TTextureId, path: &str) {
+        let image = {
+            let image = image::io::Reader::open(path).unwrap().decode().unwrap().to_rgba8();
+            let image_dimensions = image.dimensions();
+            let image = RawImage2d::from_raw_rgba_reversed(&image.into_raw(), image_dimensions);
+            CompressedSrgbTexture2d::new(&self.display, image).unwrap()
+        };
+
+        self.textures.insert(id, Texture::Image(image));
+    }
+
+    pub fn get_viewport(&self) -> (f32, f32) {
+        let size = self.display.gl_window().window().inner_size();
+        (size.width as f32, size.height as f32)
+    }
+
+    pub fn reset_cursor(&mut self) {
+        self.cursor = (0.0, 0.0);
+    }
+
+    fn setup_draw(&mut self, vertices: &[Vertex]) -> (VertexBuffer<Vertex>, IndexBuffer<u16>) {
+        let vb = VertexBuffer::new(&self.display, vertices).unwrap();
         let ib = IndexBuffer::new(
-            self.display, 
+            &self.display, 
             PrimitiveType::TriangleStrip, 
             &(0..(vertices.len() as u16)).collect::<Vec<u16>>()
         ).unwrap();
 
+        (vb, ib)
+    }
+
+    fn draw_vertices(&mut self, vertices: &[Vertex], percentages: bool) {
+        let (vb, ib) = self.setup_draw(vertices);
+
+        let tex = Texture2d::empty(&self.display, 0, 0).unwrap();
         let uniforms = uniform! { 
             size: [1.0/self.viewport.0, 1.0/self.viewport.1],
-            is_percentage: percentages
+            is_percentage: percentages,
+            use_texture: false,
+            tex: &tex
         };
 
         self.frame.draw(&vb, &ib, &self.program, &uniforms, &Default::default())
             .unwrap();
     }
 
+    fn draw_texture(&mut self, pos: (f32, f32), size: (f32, f32), texture_id: TTextureId) {
+        let (x, y) = pos;
+        let (width, height) = size;
+        let vertices = &[
+            Vertex::textured((0.0, 1.0), x, y),
+            Vertex::textured((0.0, 0.0), x, y + height),
+            Vertex::textured((1.0, 1.0), x + width, y),
+            Vertex::textured((1.0, 0.0), x + width, y + height)
+        ];
+        let (vb, ib) = self.setup_draw(vertices);
+
+        match self.textures.get(&texture_id).unwrap() {
+            Texture::Image(tex) => {
+                let uniforms = uniform! { 
+                    size: [1.0/self.viewport.0, 1.0/self.viewport.1],
+                    is_percentage: false,
+                    use_texture: true,
+                    tex: tex
+                };
+
+                self.frame.draw(&vb, &ib, &self.program, &uniforms, &Default::default())
+                    .unwrap();
+            }
+        }
+    }
+
     pub fn clear(&mut self) {
         self.frame.clear_color(0.0, 0.0, 0.0, 1.0);
     }
 
-    pub fn row(&mut self, f: impl Fn(&mut Renderer) -> ()) {
+    pub fn texture(&mut self, id: TTextureId, size: (f32, f32)) {
+        let (width, height) = size;
+        let x = self.cursor.0;
+        let y = self.cursor.1;
+        self.draw_texture((x, y), (width, height), id);
+        self.handle_new_shape(width, height);
+    }
+
+    pub fn text(&mut self, value: &str) {
+    }
+
+    pub fn row(&mut self, f: impl Fn(&mut Self) -> ()) {
         self.layout_stack.push(Layout::Row {
             height: 0.0,
             x: self.cursor.0,
@@ -174,7 +278,7 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    pub fn col(&mut self, f: impl Fn(&mut Renderer) -> ()) {
+    pub fn col(&mut self, f: impl Fn(&mut Self) -> ()) {
         self.layout_stack.push(Layout::Col {
             width: 0.0,
             x: self.cursor.0,
@@ -187,19 +291,35 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    pub fn animate<const N: usize>(&mut self, id: u32, duration: Duration, transitions: &[Transition; N], f: impl Fn(&mut Renderer, [f32; N]) -> ()) {
+    pub fn animate<const N: usize>(&mut self, id: u32, duration: Duration, transitions: &[Transition; N], f: impl Fn(&mut Self, [f32; N]) -> ()) {
         let result = match self.animations.get_mut(&id) {
             Some(animation) => animation.animate(),
             None => {
                 let mut animation = Animation::new(duration, transitions.to_vec());
                 let result = animation.animate();
                 self.animations.insert(id, animation);
-                dbg!(&self.animations);
                 result
             }
         };
 
         f(self, result.try_into().unwrap());
+    }
+
+    fn handle_new_shape(&mut self, shape_width: f32, shape_height: f32) {
+        match self.layout_stack.iter_mut().last().unwrap() {
+            Layout::Row { height, .. } => {
+                self.cursor.0 += shape_width;
+                if shape_height > *height {
+                    *height = shape_height;
+                }
+            },
+            Layout::Col { width, .. } => {
+                self.cursor.1 += shape_height;
+                if shape_width > *width {
+                    *width = shape_width;
+                }
+            },
+        }
     }
 
     pub fn space(&mut self, size: f32) {
@@ -210,70 +330,50 @@ impl<'a> Renderer<'a> {
     }
 
     pub fn rectangle(&mut self, size: (f32, f32), color: Color) {
-        let color = color.into();
         let (width, height) = size;
         let (x, y) = self.cursor;
 
         self.draw_vertices(&[
-            Vertex {
-                position: [x, y],
-                color,
-            },
-            Vertex {
-                position: [x, y + height],
-                color,
-            },
-            Vertex {
-                position: [x + width, y],
-                color,
-            },
-            Vertex {
-                position: [x + width, y + height],
-                color,
-            },
+            Vertex::colored(color, x, y),
+            Vertex::colored(color, x, y + height),
+            Vertex::colored(color, x + width, y),
+            Vertex::colored(color, x + width, y + height)
         ], false);
 
-        let shape_height = height;
-        let shape_width = width;
-
-        match self.layout_stack.iter_mut().last().unwrap() {
-            Layout::Row { height, .. } => {
-                self.cursor.0 += width;
-                if shape_height > *height {
-                    *height = shape_height;
-                }
-            },
-            Layout::Col { width, .. } => {
-                self.cursor.1 += height;
-                if shape_width > *width {
-                    *width = shape_width;
-                }
-            },
-        }
+        self.handle_new_shape(width, height);
     }
 
-    pub fn done(self) {
-        self.frame.finish().unwrap();
+    pub(crate) fn next_frame(&mut self) {
+        self.reset_cursor();
+        self.viewport = self.get_viewport();
+        self.frame = self.display.draw();
+    }
+
+    pub(crate) fn done(&mut self) {
+        self.frame.set_finish().unwrap();
     }
 }
 
 trait Application {
-    fn render(&mut self, renderer: &mut Renderer);
+    type TextureId: Eq + Hash;
+
+    fn init(&mut self, renderer: &mut Renderer<Self::TextureId>);
+    fn render(&mut self, renderer: &mut Renderer<Self::TextureId>);
     fn on_event(&mut self, _event: Event<()>) -> Option<ControlFlow> {
         None
     }
 }
 
-trait ApplicationWrapper {
+trait ApplicationWrapper<T: Application> {
     fn run(self);
-    fn call_render(&mut self, display: &Display, program: &Program, animations: &mut HashMap<u32, Animation>);
+    fn call_render(&mut self, renderer: &mut Renderer<T::TextureId>);
 }
 
-impl<T: 'static> ApplicationWrapper for T where T: Application {
-    fn call_render(&mut self, display: &Display, program: &Program, animations: &mut HashMap<u32, Animation>) {
-        let mut renderer = Renderer::new(display, program, animations);
+impl<T: 'static> ApplicationWrapper<T> for T where T: Application {
+    fn call_render(&mut self, renderer: &mut Renderer<T::TextureId>) {
         renderer.clear();
-        self.render(&mut renderer);
+        renderer.next_frame();
+        self.render(renderer);
         renderer.done();
     }
 
@@ -283,9 +383,11 @@ impl<T: 'static> ApplicationWrapper for T where T: Application {
         let cb = ContextBuilder::new();
         let display = Display::new(wb, cb, &ev).unwrap();
         let program = Program::from_source(&display, VERTEX_SHADER, FRAGMENT_SHADER, None).unwrap();
-        let mut animations = HashMap::new();
+        let mut renderer = Renderer::new(display, program);
 
-        self.call_render(&display, &program, &mut animations);
+        self.init(&mut renderer);
+
+        self.call_render(&mut renderer);
 
         ev.run(move |event, _, control_flow| {
             *control_flow = match &event {
@@ -295,7 +397,7 @@ impl<T: 'static> ApplicationWrapper for T where T: Application {
                     _ => ControlFlow::Poll,
                 },
                 Event::MainEventsCleared => {
-                    self.call_render(&display, &program, &mut animations);
+                    self.call_render(&mut renderer);
                     ControlFlow::Poll
                 }
                 _ => ControlFlow::Poll,
@@ -331,32 +433,24 @@ impl Transition {
 
 struct App;
 
+#[derive(Copy, Clone, Hash, PartialEq, Eq)]
+enum TextureId {
+    Moon
+}
+
 impl Application for App {
+    type TextureId = TextureId;
+
     fn on_event(&mut self, event: Event<()>) -> Option<ControlFlow> {
         None
     }
-    fn render(&mut self, r: &mut Renderer) {
-        let btn_size = (200.0, 100.0);
 
-        r.row(|r| {
-            r.col(|r| {
-                r.rectangle(btn_size, Color::new(0, 200, 0));
-                r.space(10.0);
-                r.rectangle(btn_size, Color::new(0, 200, 0));
-            });
-            r.space(10.0);
-            r.col(|r| {
-                r.rectangle(btn_size, Color::new(0, 200, 0));
-                r.space(10.0);
-                r.rectangle(btn_size, Color::new(0, 200, 0));
-            });
-            r.space(10.0);
-            r.col(|r| {
-                r.rectangle(btn_size, Color::new(0, 200, 0));
-                r.space(10.0);
-                r.rectangle(btn_size, Color::new(0, 200, 0));
-            });
-        });
+    fn init(&mut self, r: &mut Renderer<Self::TextureId>) {
+        r.set_image(TextureId::Moon, "test.jpg");
+    }
+
+    fn render(&mut self, r: &mut Renderer<Self::TextureId>) {
+        r.texture(TextureId::Moon, (800.0, 600.0));
     }
 }
 
