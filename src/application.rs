@@ -88,6 +88,7 @@ where
                 },
                 Event::MainEventsCleared => {
                     self.call_render(&mut renderer);
+                    dbg!(renderer.fps());
                     ControlFlow::Poll
                 }
                 _ => ControlFlow::Poll,

@@ -9,7 +9,7 @@ use glium::{
     uniform, Display, Frame, IndexBuffer, Program, Surface, VertexBuffer,
 };
 
-use std::{collections::HashMap, convert::TryInto, hash::Hash, time::Duration};
+use std::{collections::HashMap, convert::TryInto, hash::Hash, time::{Duration, Instant}};
 
 use crate::animation::{Animation, Transition};
 use crate::color::Color;
@@ -18,6 +18,9 @@ use crate::vertex::Vertex;
 pub struct Renderer<TTextureId: Hash + Eq> {
     /// this holds the current frame
     frame: Frame,
+    /// how long the last frame took to render in nanoseconds
+    frame_time: u32,
+    frame_start: Instant,
     display: Display,
     program: Program,
     /// used for scaling the ui to the display
@@ -37,6 +40,8 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
             frame,
             background_color: Color::new(0, 0, 0),
             display,
+            frame_time: 0,
+            frame_start: Instant::now(),
             program,
             viewport: (0.0, 0.0),
             cursor: (0.0, 0.0),
@@ -48,6 +53,14 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
             animations: HashMap::new(),
             textures: HashMap::new(),
         }
+    }
+
+    pub fn fps(&self) -> u32 {
+        if self.frame_time == 0 {
+            return 0;
+        }
+
+        1_000_000_000 / self.frame_time
     }
 
     pub fn set_background_color(&mut self, color: Color) {
@@ -260,10 +273,12 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         self.reset_cursor();
         self.viewport = self.get_viewport();
         self.frame = self.display.draw();
+        self.frame_start = Instant::now();
     }
 
     pub(crate) fn done(&mut self) {
         self.frame.set_finish().unwrap();
+        self.frame_time = self.frame_start.elapsed().as_nanos() as u32;
     }
 }
 

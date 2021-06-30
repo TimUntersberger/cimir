@@ -94,6 +94,6 @@ impl Application for App {
 }
 
 fn main() {
-    appbar::Appbar::new().run();
-    // App::new().run();
+    // appbar::Appbar::new().run();
+    App::new().run();
 }
