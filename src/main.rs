@@ -9,6 +9,8 @@ use glium::{
     Display, IndexBuffer, Program, Surface, VertexBuffer, DrawParameters
 };
 
+use std::{convert::TryInto, collections::HashMap, time::{Duration, Instant}};
+
 const VERTEX_SHADER: &'static str = r#"
 #version 330 core
 layout (location = 0) in vec2 position; // the position variable has attribute position 0
@@ -78,17 +80,53 @@ impl Into<[f32; 3]> for Color {
     }
 }
 
+#[derive(Debug, Clone)]
+struct Animation {
+    start_time: Instant,
+    duration: Duration,
+    transitions: Vec<Transition>,
+    pub done: bool
+}
+
+impl Animation {
+    pub fn new(duration: Duration, transitions: Vec<Transition>) -> Self {
+        Animation {
+            start_time: Instant::now(),
+            duration,
+            transitions,
+            done: false
+        }
+    }
+
+    pub fn animate(&mut self) -> Vec<f32> {
+        if self.done {
+            return self.transitions.iter().map(|t| t.get_done()).collect();
+        }
+        let progress = (self.start_time.elapsed().as_millis() as f32 / self.duration.as_millis() as f32).min(1.0);
+        if progress == 1.0 {
+            self.done = true;
+        }
+        self.transitions.iter().map(|t| t.calculate(progress)).collect()
+    }
+}
+
+enum Layout {
+    Row { height: f32, x: f32, y: f32 },
+    Col { width: f32, x: f32, y: f32 }
+}
+
 struct Renderer<'a> {
     frame: Frame,
     display: &'a Display,
     program: &'a Program,
     viewport: (f32, f32),
     cursor: (f32, f32),
-    row_stack: Vec<f32>,
+    layout_stack: Vec<Layout>,
+    animations: &'a mut HashMap<u32, Animation>
 }
 
 impl<'a> Renderer<'a> {
-    pub fn new(display: &'a Display, program: &'a Program) -> Self {
+    pub fn new(display: &'a Display, program: &'a Program, animations: &'a mut HashMap<u32, Animation>) -> Self {
         let size = display.gl_window().window().inner_size();
         let viewport = (size.width as f32, size.height as f32);
         Self {
@@ -97,7 +135,8 @@ impl<'a> Renderer<'a> {
             program,
             viewport,
             cursor: (0.0, 0.0),
-            row_stack: vec![]
+            layout_stack: vec![Layout::Col { width: 0.0, x: 0.0, y: 0.0 }],
+            animations
         }
     }
 
@@ -118,18 +157,55 @@ impl<'a> Renderer<'a> {
             .unwrap();
     }
 
+    pub fn clear(&mut self) {
+        self.frame.clear_color(0.0, 0.0, 0.0, 1.0);
+    }
+
     pub fn row(&mut self, f: impl Fn(&mut Renderer) -> ()) {
-        self.row_stack.push(0.0);
+        self.layout_stack.push(Layout::Row {
+            height: 0.0,
+            x: self.cursor.0,
+            y: self.cursor.1
+        });
         f(self);
-        self.cursor.0 = 0.0;
-        self.cursor.1 += self.row_stack.pop().unwrap();
+        if let Layout::Row { height, x, y } = self.layout_stack.pop().unwrap() {
+            self.cursor.0 = x;
+            self.cursor.1 = y + height;
+        }
+    }
+
+    pub fn col(&mut self, f: impl Fn(&mut Renderer) -> ()) {
+        self.layout_stack.push(Layout::Col {
+            width: 0.0,
+            x: self.cursor.0,
+            y: self.cursor.1
+        });
+        f(self);
+        if let Layout::Col { width, y, x } = self.layout_stack.pop().unwrap() {
+            self.cursor.0 = x + width;
+            self.cursor.1 = y;
+        }
+    }
+
+    pub fn animate<const N: usize>(&mut self, id: u32, duration: Duration, transitions: &[Transition; N], f: impl Fn(&mut Renderer, [f32; N]) -> ()) {
+        let result = match self.animations.get_mut(&id) {
+            Some(animation) => animation.animate(),
+            None => {
+                let mut animation = Animation::new(duration, transitions.to_vec());
+                let result = animation.animate();
+                self.animations.insert(id, animation);
+                dbg!(&self.animations);
+                result
+            }
+        };
+
+        f(self, result.try_into().unwrap());
     }
 
     pub fn space(&mut self, size: f32) {
-        if !self.row_stack.is_empty() {
-            self.cursor.0 += size;
-        } else {
-            self.cursor.1 += size;
+        match self.layout_stack.iter().last().unwrap() {
+            Layout::Row { .. } => self.cursor.0 += size,
+            Layout::Col { .. } => self.cursor.1 += size,
         }
     }
 
@@ -157,13 +233,22 @@ impl<'a> Renderer<'a> {
             },
         ], false);
 
-        if let Some(val) = self.row_stack.iter_mut().last() {
-            self.cursor.0 += width;
-            if *val < height {
-                *val = height;
-            }
-        } else {
-            self.cursor.1 += height;
+        let shape_height = height;
+        let shape_width = width;
+
+        match self.layout_stack.iter_mut().last().unwrap() {
+            Layout::Row { height, .. } => {
+                self.cursor.0 += width;
+                if shape_height > *height {
+                    *height = shape_height;
+                }
+            },
+            Layout::Col { width, .. } => {
+                self.cursor.1 += height;
+                if shape_width > *width {
+                    *width = shape_width;
+                }
+            },
         }
     }
 
@@ -181,12 +266,13 @@ trait Application {
 
 trait ApplicationWrapper {
     fn run(self);
-    fn call_render(&mut self, display: &Display, program: &Program);
+    fn call_render(&mut self, display: &Display, program: &Program, animations: &mut HashMap<u32, Animation>);
 }
 
 impl<T: 'static> ApplicationWrapper for T where T: Application {
-    fn call_render(&mut self, display: &Display, program: &Program) {
-        let mut renderer = Renderer::new(display, program);
+    fn call_render(&mut self, display: &Display, program: &Program, animations: &mut HashMap<u32, Animation>) {
+        let mut renderer = Renderer::new(display, program, animations);
+        renderer.clear();
         self.render(&mut renderer);
         renderer.done();
     }
@@ -197,19 +283,21 @@ impl<T: 'static> ApplicationWrapper for T where T: Application {
         let cb = ContextBuilder::new();
         let display = Display::new(wb, cb, &ev).unwrap();
         let program = Program::from_source(&display, VERTEX_SHADER, FRAGMENT_SHADER, None).unwrap();
+        let mut animations = HashMap::new();
 
-        self.call_render(&display, &program);
+        self.call_render(&display, &program, &mut animations);
 
         ev.run(move |event, _, control_flow| {
             *control_flow = match &event {
                 Event::WindowEvent { event, .. } => match event {
                     WindowEvent::CloseRequested => ControlFlow::Exit,
-                    WindowEvent::Resized(..) => {
-                        self.call_render(&display, &program);
-                        ControlFlow::Poll
-                    }
+                    WindowEvent::Resized(..) => ControlFlow::Poll,
                     _ => ControlFlow::Poll,
                 },
+                Event::MainEventsCleared => {
+                    self.call_render(&display, &program, &mut animations);
+                    ControlFlow::Poll
+                }
                 _ => ControlFlow::Poll,
             };
 
@@ -220,32 +308,54 @@ impl<T: 'static> ApplicationWrapper for T where T: Application {
     }
 }
 
+#[derive(Clone, Debug)]
+enum Transition {
+    Linear(f32, f32)
+}
+
+impl Transition {
+    pub fn calculate(&self, progress: f32) -> f32 {
+        match self {
+            Self::Linear(from, to) => {
+                let d = to - from;
+                from + d * progress
+            }
+        }
+    }
+    pub fn get_done(&self) -> f32 {
+        match self {
+            Self::Linear(_, end) => *end
+        }
+    }
+}
+
 struct App;
 
 impl Application for App {
     fn on_event(&mut self, event: Event<()>) -> Option<ControlFlow> {
-        dbg!(&event);
         None
     }
     fn render(&mut self, r: &mut Renderer) {
         let btn_size = (200.0, 100.0);
 
         r.row(|r| {
-            r.rectangle(btn_size, Color::new(0, 200, 0));
+            r.col(|r| {
+                r.rectangle(btn_size, Color::new(0, 200, 0));
+                r.space(10.0);
+                r.rectangle(btn_size, Color::new(0, 200, 0));
+            });
             r.space(10.0);
-            r.rectangle(btn_size, Color::new(0, 200, 0));
+            r.col(|r| {
+                r.rectangle(btn_size, Color::new(0, 200, 0));
+                r.space(10.0);
+                r.rectangle(btn_size, Color::new(0, 200, 0));
+            });
             r.space(10.0);
-            r.rectangle(btn_size, Color::new(0, 200, 0));
-        });
-        r.space(10.0);
-        r.rectangle(btn_size, Color::new(0, 200, 0));
-        r.space(10.0);
-        r.row(|r| {
-            r.rectangle(btn_size, Color::new(0, 200, 0));
-            r.space(10.0);
-            r.rectangle(btn_size, Color::new(0, 200, 0));
-            r.space(10.0);
-            r.rectangle(btn_size, Color::new(0, 200, 0));
+            r.col(|r| {
+                r.rectangle(btn_size, Color::new(0, 200, 0));
+                r.space(10.0);
+                r.rectangle(btn_size, Color::new(0, 200, 0));
+            });
         });
     }
 }
