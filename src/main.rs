@@ -1,20 +1,30 @@
 use winit::{
-    event::{Event, WindowEvent},
+    event::{ElementState, Event, VirtualKeyCode, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
 
 use glium::{
-    texture::{Texture2d, RawImage2d, CompressedSrgbTexture2d}, uniform, Rect, Frame, glutin::ContextBuilder, implement_vertex, index::PrimitiveType, uniforms::EmptyUniforms,
-    Display, IndexBuffer, Program, Surface, VertexBuffer, DrawParameters
+    glutin::ContextBuilder,
+    implement_vertex,
+    index::PrimitiveType,
+    texture::{CompressedSrgbTexture2d, RawImage2d, Texture2d},
+    uniform,
+    uniforms::EmptyUniforms,
+    Display, DrawParameters, Frame, IndexBuffer, Program, Rect, Surface, VertexBuffer,
 };
 
-use std::{hash::Hash, convert::TryInto, collections::HashMap, time::{Duration, Instant}};
+use std::{
+    collections::HashMap,
+    convert::TryInto,
+    hash::Hash,
+    time::{Duration, Instant},
+};
 
 const VERTEX_SHADER: &'static str = r#"
 #version 330 core
-layout (location = 0) in vec2 position; // the position variable has attribute position 0
-layout (location = 1) in vec3 color; // the position variable has attribute position 0
+layout (location = 0) in vec2 position;
+layout (location = 1) in vec3 color;
 layout (location = 2) in vec2 tex_pos;
 
 uniform vec2 size;
@@ -54,7 +64,7 @@ in vec2 vertex_tex_pos;
 void main()
 {
     if (use_texture) {
-        FragColor = texture(tex, vertex_tex_pos);
+        FragColor = texture(tex, vertex_tex_pos) * vertex_color;
     } else {
         FragColor = vertex_color;
     }
@@ -65,7 +75,7 @@ void main()
 struct Vertex {
     position: [f32; 2],
     color: [f32; 3],
-    tex_pos: [f32; 2]
+    tex_pos: [f32; 2],
 }
 
 implement_vertex!(Vertex, position, color, tex_pos);
@@ -75,14 +85,14 @@ impl Vertex {
         Self {
             color: color.into(),
             position: [x, y],
-            tex_pos: [0.0, 0.0]
+            tex_pos: [0.0, 0.0],
         }
     }
     pub fn textured(tex_pos: (f32, f32), x: f32, y: f32) -> Self {
         Self {
             position: [x, y],
             color: [0.0, 0.0, 0.0],
-            tex_pos: [tex_pos.0, tex_pos.1]
+            tex_pos: [tex_pos.0, tex_pos.1],
         }
     }
 }
@@ -91,22 +101,22 @@ impl Vertex {
 struct Color {
     r: u16,
     g: u16,
-    b: u16
+    b: u16,
 }
 
 impl Color {
     pub fn new(r: u16, g: u16, b: u16) -> Self {
-        Self {
-            r,
-            g,
-            b
-        }
+        Self { r, g, b }
     }
 }
 
 impl Into<[f32; 3]> for Color {
     fn into(self) -> [f32; 3] {
-        [self.r as f32 / 255.0, self.g as f32 / 255.0, self.b as f32 / 255.0]
+        [
+            self.r as f32 / 255.0,
+            self.g as f32 / 255.0,
+            self.b as f32 / 255.0,
+        ]
     }
 }
 
@@ -115,7 +125,7 @@ struct Animation {
     start_time: Instant,
     duration: Duration,
     transitions: Vec<Transition>,
-    pub done: bool
+    pub done: bool,
 }
 
 impl Animation {
@@ -124,29 +134,39 @@ impl Animation {
             start_time: Instant::now(),
             duration,
             transitions,
-            done: false
+            done: false,
         }
+    }
+
+    pub fn reset(&mut self) {
+        self.done = false;
+        self.start_time = Instant::now()
     }
 
     pub fn animate(&mut self) -> Vec<f32> {
         if self.done {
             return self.transitions.iter().map(|t| t.get_done()).collect();
         }
-        let progress = (self.start_time.elapsed().as_millis() as f32 / self.duration.as_millis() as f32).min(1.0);
+        let progress = (self.start_time.elapsed().as_millis() as f32
+            / self.duration.as_millis() as f32)
+            .min(1.0);
         if progress == 1.0 {
             self.done = true;
         }
-        self.transitions.iter().map(|t| t.calculate(progress)).collect()
+        self.transitions
+            .iter()
+            .map(|t| t.calculate(progress))
+            .collect()
     }
 }
 
 enum Layout {
     Row { height: f32, x: f32, y: f32 },
-    Col { width: f32, x: f32, y: f32 }
+    Col { width: f32, x: f32, y: f32 },
 }
 
 enum Texture {
-    Image(CompressedSrgbTexture2d)
+    Image(CompressedSrgbTexture2d),
 }
 
 struct Renderer<TTextureId: Hash + Eq> {
@@ -157,9 +177,10 @@ struct Renderer<TTextureId: Hash + Eq> {
     /// used for scaling the ui to the display
     viewport: (f32, f32),
     cursor: (f32, f32),
+    background_color: Color,
     layout_stack: Vec<Layout>,
     animations: HashMap<u32, Animation>,
-    textures: HashMap<TTextureId, Texture>
+    textures: HashMap<TTextureId, Texture>,
 }
 
 impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
@@ -168,25 +189,54 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         frame.set_finish().unwrap();
         Self {
             frame,
+            background_color: Color::new(0, 0, 0),
             display,
             program,
             viewport: (0.0, 0.0),
             cursor: (0.0, 0.0),
-            layout_stack: vec![Layout::Col { width: 0.0, x: 0.0, y: 0.0 }],
+            layout_stack: vec![Layout::Col {
+                width: 0.0,
+                x: 0.0,
+                y: 0.0,
+            }],
             animations: HashMap::new(),
-            textures: HashMap::new()
+            textures: HashMap::new(),
         }
+    }
+
+    pub fn set_background_color(&mut self, color: Color) {
+        self.background_color = color;
     }
 
     pub fn set_image(&mut self, id: TTextureId, path: &str) {
         let image = {
-            let image = image::io::Reader::open(path).unwrap().decode().unwrap().to_rgba8();
+            let image = image::io::Reader::open(path)
+                .unwrap()
+                .decode()
+                .unwrap()
+                .to_rgba8();
             let image_dimensions = image.dimensions();
             let image = RawImage2d::from_raw_rgba_reversed(&image.into_raw(), image_dimensions);
             CompressedSrgbTexture2d::new(&self.display, image).unwrap()
         };
 
         self.textures.insert(id, Texture::Image(image));
+    }
+
+    pub fn remaining_width(&self) -> f32 {
+        self.viewport.0 - self.cursor.0
+    }
+
+    pub fn remaining_height(&self) -> f32 {
+        self.viewport.1 - self.cursor.1
+    }
+
+    pub fn width(&self) -> f32 {
+        self.viewport.0
+    }
+
+    pub fn height(&self) -> f32 {
+        self.viewport.1
     }
 
     pub fn get_viewport(&self) -> (f32, f32) {
@@ -201,10 +251,11 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
     fn setup_draw(&mut self, vertices: &[Vertex]) -> (VertexBuffer<Vertex>, IndexBuffer<u16>) {
         let vb = VertexBuffer::new(&self.display, vertices).unwrap();
         let ib = IndexBuffer::new(
-            &self.display, 
-            PrimitiveType::TriangleStrip, 
-            &(0..(vertices.len() as u16)).collect::<Vec<u16>>()
-        ).unwrap();
+            &self.display,
+            PrimitiveType::TriangleStrip,
+            &(0..(vertices.len() as u16)).collect::<Vec<u16>>(),
+        )
+        .unwrap();
 
         (vb, ib)
     }
@@ -214,63 +265,63 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
 
         let tex = Texture2d::empty(&self.display, 0, 0).unwrap();
         let size = [self.viewport.0, self.viewport.1];
-        let uniforms = uniform! { 
+        let uniforms = uniform! {
             size: size,
             is_percentage: percentages,
             use_texture: false,
             tex: &tex
         };
 
-        self.frame.draw(&vb, &ib, &self.program, &uniforms, &Default::default())
+        self.frame
+            .draw(&vb, &ib, &self.program, &uniforms, &Default::default())
             .unwrap();
     }
 
-    fn draw_texture(&mut self, pos: (f32, f32), size: (f32, f32), texture_id: TTextureId) {
-        let (x, y) = pos;
+    fn draw_texture(&mut self, size: (f32, f32), texture_id: TTextureId) {
+        let (x, y) = self.cursor;
         let (width, height) = size;
         let vertices = &[
             Vertex::textured((0.0, 1.0), x, y),
             Vertex::textured((0.0, 0.0), x, y + height),
             Vertex::textured((1.0, 1.0), x + width, y),
-            Vertex::textured((1.0, 0.0), x + width, y + height)
+            Vertex::textured((1.0, 0.0), x + width, y + height),
         ];
         let (vb, ib) = self.setup_draw(vertices);
 
         match self.textures.get(&texture_id).unwrap() {
             Texture::Image(tex) => {
-                let uniforms = uniform! { 
+                let uniforms = uniform! {
                     size: [self.viewport.0 / 100.0, self.viewport.1 / 100.0],
                     is_percentage: false,
                     use_texture: true,
                     tex: tex
                 };
 
-                self.frame.draw(&vb, &ib, &self.program, &uniforms, &Default::default())
+                self.frame
+                    .draw(&vb, &ib, &self.program, &uniforms, &Default::default())
                     .unwrap();
             }
         }
     }
 
     pub fn clear(&mut self) {
-        self.frame.clear_color(0.0, 0.0, 0.0, 1.0);
+        let c: [f32; 3] = self.background_color.into();
+        self.frame.clear_color(c[0], c[1], c[2], 1.0);
     }
 
     pub fn texture(&mut self, id: TTextureId, size: (f32, f32)) {
         let (width, height) = size;
-        let x = self.cursor.0;
-        let y = self.cursor.1;
-        self.draw_texture((x, y), (width, height), id);
+        self.draw_texture((width, height), id);
         self.handle_new_shape(width, height);
     }
 
-    pub fn text(&mut self, value: &str) {
-    }
+    pub fn text(&mut self, value: &str) {}
 
     pub fn row(&mut self, f: impl Fn(&mut Self) -> ()) {
         self.layout_stack.push(Layout::Row {
             height: 0.0,
             x: self.cursor.0,
-            y: self.cursor.1
+            y: self.cursor.1,
         });
         f(self);
         if let Layout::Row { height, x, y } = self.layout_stack.pop().unwrap() {
@@ -283,7 +334,7 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         self.layout_stack.push(Layout::Col {
             width: 0.0,
             x: self.cursor.0,
-            y: self.cursor.1
+            y: self.cursor.1,
         });
         f(self);
         if let Layout::Col { width, y, x } = self.layout_stack.pop().unwrap() {
@@ -292,7 +343,13 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         }
     }
 
-    pub fn animate<const N: usize>(&mut self, id: u32, duration: Duration, transitions: &[Transition; N], f: impl Fn(&mut Self, [f32; N]) -> ()) {
+    pub fn animate<const N: usize>(
+        &mut self,
+        id: u32,
+        duration: Duration,
+        transitions: &[Transition; N],
+        f: impl Fn(&mut Self, [f32; N]) -> (),
+    ) {
         let result = match self.animations.get_mut(&id) {
             Some(animation) => animation.animate(),
             None => {
@@ -313,13 +370,19 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
                 if shape_height > *height {
                     *height = shape_height;
                 }
-            },
+            }
             Layout::Col { width, .. } => {
                 self.cursor.1 += shape_height;
                 if shape_width > *width {
                     *width = shape_width;
                 }
-            },
+            }
+        }
+    }
+
+    pub fn reset_animation(&mut self, id: u32) {
+        if let Some(animation) = self.animations.get_mut(&id) {
+            animation.reset();
         }
     }
 
@@ -334,12 +397,15 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         let (width, height) = size;
         let (x, y) = self.cursor;
 
-        self.draw_vertices(&[
-            Vertex::colored(color, x, y),
-            Vertex::colored(color, x, y + height),
-            Vertex::colored(color, x + width, y),
-            Vertex::colored(color, x + width, y + height)
-        ], false);
+        self.draw_vertices(
+            &[
+                Vertex::colored(color, x, y),
+                Vertex::colored(color, x, y + height),
+                Vertex::colored(color, x + width, y),
+                Vertex::colored(color, x + width, y + height),
+            ],
+            false,
+        );
 
         self.handle_new_shape(width, height);
     }
@@ -360,7 +426,25 @@ trait Application {
 
     fn init(&mut self, renderer: &mut Renderer<Self::TextureId>);
     fn render(&mut self, renderer: &mut Renderer<Self::TextureId>);
-    fn on_event(&mut self, _event: Event<()>) -> Option<ControlFlow> {
+    fn on_event(
+        &mut self,
+        _event: Event<()>,
+        _r: &mut Renderer<Self::TextureId>,
+    ) -> Option<ControlFlow> {
+        None
+    }
+    fn on_key_down(
+        &mut self,
+        _key: VirtualKeyCode,
+        _r: &mut Renderer<Self::TextureId>,
+    ) -> Option<ControlFlow> {
+        None
+    }
+    fn on_key_up(
+        &mut self,
+        _key: VirtualKeyCode,
+        _r: &mut Renderer<Self::TextureId>,
+    ) -> Option<ControlFlow> {
         None
     }
 }
@@ -370,7 +454,10 @@ trait ApplicationWrapper<T: Application> {
     fn call_render(&mut self, renderer: &mut Renderer<T::TextureId>);
 }
 
-impl<T: 'static> ApplicationWrapper<T> for T where T: Application {
+impl<T: 'static> ApplicationWrapper<T> for T
+where
+    T: Application,
+{
     fn call_render(&mut self, renderer: &mut Renderer<T::TextureId>) {
         renderer.clear();
         renderer.next_frame();
@@ -388,13 +475,18 @@ impl<T: 'static> ApplicationWrapper<T> for T where T: Application {
 
         self.init(&mut renderer);
 
-        self.call_render(&mut renderer);
-
         ev.run(move |event, _, control_flow| {
             *control_flow = match &event {
                 Event::WindowEvent { event, .. } => match event {
                     WindowEvent::CloseRequested => ControlFlow::Exit,
                     WindowEvent::Resized(..) => ControlFlow::Poll,
+                    WindowEvent::KeyboardInput { input, .. } => input
+                        .virtual_keycode
+                        .and_then(|key| match input.state {
+                            ElementState::Pressed => self.on_key_down(key, &mut renderer),
+                            ElementState::Released => self.on_key_up(key, &mut renderer),
+                        })
+                        .unwrap_or(ControlFlow::Poll),
                     _ => ControlFlow::Poll,
                 },
                 Event::MainEventsCleared => {
@@ -404,7 +496,7 @@ impl<T: 'static> ApplicationWrapper<T> for T where T: Application {
                 _ => ControlFlow::Poll,
             };
 
-            if let Some(cf) = self.on_event(event) {
+            if let Some(cf) = self.on_event(event, &mut renderer) {
                 *control_flow = cf;
             }
         });
@@ -413,7 +505,7 @@ impl<T: 'static> ApplicationWrapper<T> for T where T: Application {
 
 #[derive(Clone, Debug)]
 enum Transition {
-    Linear(f32, f32)
+    Linear(f32, f32),
 }
 
 impl Transition {
@@ -427,34 +519,77 @@ impl Transition {
     }
     pub fn get_done(&self) -> f32 {
         match self {
-            Self::Linear(_, end) => *end
+            Self::Linear(_, end) => *end,
         }
     }
 }
 
-struct App;
+struct App {
+    dark: bool,
+    titlebar_animation_id: u32
+}
+
+impl App {
+    pub fn new() -> Self {
+        Self { 
+            dark: false, 
+            titlebar_animation_id: 0 
+        }
+    }
+}
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq)]
 enum TextureId {
-    Moon
+    Moon,
 }
 
 impl Application for App {
     type TextureId = TextureId;
 
-    fn on_event(&mut self, event: Event<()>) -> Option<ControlFlow> {
+    fn on_key_down(
+        &mut self,
+        key: VirtualKeyCode,
+        r: &mut Renderer<Self::TextureId>,
+    ) -> Option<ControlFlow> {
+        match key {
+            VirtualKeyCode::Key1 => {
+                self.dark = !self.dark;
+                if self.dark {
+                    r.set_background_color(Color::new(51, 51, 51));
+                } else {
+                    r.set_background_color(Color::new(230, 230, 230));
+                }
+            }
+            VirtualKeyCode::Key2 => {
+                r.reset_animation(self.titlebar_animation_id);
+            }
+            _ => {}
+        }
         None
     }
 
     fn init(&mut self, r: &mut Renderer<Self::TextureId>) {
         r.set_image(TextureId::Moon, "test.jpg");
+        r.set_background_color(Color::new(230, 230, 230));
     }
 
     fn render(&mut self, r: &mut Renderer<Self::TextureId>) {
-        r.rectangle((800.0, 600.0), Color::new(255, 255, 255));
+        let color = if self.dark {
+            Color::new(40, 40, 40)
+        } else {
+            Color::new(200, 200, 200)
+        };
+        r.animate(self.titlebar_animation_id, Duration::from_millis(500), &[Transition::Linear(0.0, 40.0)], |r, [height]| {
+            r.row(|r| {
+                r.rectangle((r.remaining_width(), height), color);
+            });
+        });
+        r.space(20.0);
+        r.texture(TextureId::Moon, (800.0, 600.0));
+        r.rectangle((r.remaining_width(), 40.0), Color::new(255, 0, 0));
     }
 }
 
 fn main() {
-    App.run();
+    App::new().run();
 }
