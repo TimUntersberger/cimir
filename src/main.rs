@@ -1,4 +1,6 @@
-pub use winit::{
+pub use winit;
+
+use winit::{
     event::{Event, VirtualKeyCode, WindowEvent},
     event_loop::ControlFlow,
 };

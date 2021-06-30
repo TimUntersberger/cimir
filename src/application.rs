@@ -1,8 +1,8 @@
-use winit::{event::ElementState, event_loop::EventLoop, window::WindowBuilder};
-
-pub use winit::{
-    event::{Event, VirtualKeyCode, WindowEvent},
+use winit::{
+    event::{ElementState, Event, VirtualKeyCode, WindowEvent},
     event_loop::ControlFlow,
+    window::WindowBuilder,
+    event_loop::EventLoop
 };
 
 use glium::{glutin::ContextBuilder, Display, Program};
@@ -15,8 +15,14 @@ use crate::shaders::{FRAGMENT_SHADER, VERTEX_SHADER};
 pub trait Application {
     type TextureId: Eq + Hash;
 
-    fn init(&mut self, renderer: &mut Renderer<Self::TextureId>);
+    fn init(&mut self, _renderer: &mut Renderer<Self::TextureId>) {}
     fn render(&mut self, renderer: &mut Renderer<Self::TextureId>);
+    fn window(
+        &mut self,
+        w: WindowBuilder,
+    ) -> WindowBuilder {
+        w
+    }
     fn on_event(
         &mut self,
         _event: Event<()>,
@@ -58,7 +64,7 @@ where
 
     fn run(mut self) {
         let ev = EventLoop::new();
-        let wb = WindowBuilder::new();
+        let wb = self.window(WindowBuilder::new());
         let cb = ContextBuilder::new();
         let display = Display::new(wb, cb, &ev).unwrap();
         let program = Program::from_source(&display, VERTEX_SHADER, FRAGMENT_SHADER, None).unwrap();
