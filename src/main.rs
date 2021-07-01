@@ -14,6 +14,7 @@ mod animation;
 mod appbar;
 mod application;
 mod color;
+mod font;
 mod renderer;
 mod shaders;
 mod vertex;
@@ -87,9 +88,9 @@ impl Application for App {
                 });
             },
         );
-        r.space(20.0);
-        r.texture(TextureId::Moon, (800.0, 600.0));
-        r.rectangle((r.remaining_width(), 40.0), Color::new(255, 0, 0));
+        r.show_fps();
+        // r.space(20.0);
+        // r.texture(TextureId::Moon, (800.0, 600.0));
     }
 }
 

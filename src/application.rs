@@ -1,8 +1,8 @@
 use winit::{
     event::{ElementState, Event, VirtualKeyCode, WindowEvent},
     event_loop::ControlFlow,
+    event_loop::EventLoop,
     window::WindowBuilder,
-    event_loop::EventLoop
 };
 
 use glium::{glutin::ContextBuilder, Display, Program};
@@ -12,15 +12,15 @@ use std::hash::Hash;
 use crate::renderer::Renderer;
 use crate::shaders::{FRAGMENT_SHADER, VERTEX_SHADER};
 
+/// Used for debugging
+const RENDER_ONCE: bool = false;
+
 pub trait Application {
     type TextureId: Eq + Hash;
 
     fn init(&mut self, _renderer: &mut Renderer<Self::TextureId>) {}
     fn render(&mut self, renderer: &mut Renderer<Self::TextureId>);
-    fn window(
-        &mut self,
-        w: WindowBuilder,
-    ) -> WindowBuilder {
+    fn window(&mut self, w: WindowBuilder) -> WindowBuilder {
         w
     }
     fn on_event(
@@ -71,6 +71,9 @@ where
         let mut renderer = Renderer::new(display, program);
 
         self.init(&mut renderer);
+        if RENDER_ONCE {
+            self.call_render(&mut renderer);
+        }
 
         ev.run(move |event, _, control_flow| {
             *control_flow = match &event {
@@ -87,8 +90,9 @@ where
                     _ => ControlFlow::Poll,
                 },
                 Event::MainEventsCleared => {
-                    self.call_render(&mut renderer);
-                    dbg!(renderer.fps());
+                    if !RENDER_ONCE {
+                        self.call_render(&mut renderer);
+                    }
                     ControlFlow::Poll
                 }
                 _ => ControlFlow::Poll,

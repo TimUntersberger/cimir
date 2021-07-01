@@ -1,4 +1,11 @@
-use crate::{color::Color, Application, winit::{dpi::{LogicalPosition, LogicalSize}, window::WindowBuilder}};
+use crate::{
+    color::Color,
+    winit::{
+        dpi::{LogicalPosition, LogicalSize},
+        window::WindowBuilder,
+    },
+    Application,
+};
 
 pub struct Appbar;
 
@@ -12,8 +19,7 @@ impl Application for Appbar {
     type TextureId = u32;
 
     fn window(&mut self, w: WindowBuilder) -> WindowBuilder {
-        w
-            .with_decorations(false)
+        w.with_decorations(false)
             .with_position(LogicalPosition::new(0.0, 0.0))
             .with_inner_size(LogicalSize::new(1920.0, 20.0))
             .with_always_on_top(true)

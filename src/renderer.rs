@@ -5,6 +5,8 @@ pub use winit::{
 
 use glium::{
     index::PrimitiveType,
+    DrawParameters,
+    Blend,
     texture::{CompressedSrgbTexture2d, RawImage2d, Texture2d},
     uniform, Display, Frame, IndexBuffer, Program, Surface, VertexBuffer,
 };
@@ -13,7 +15,9 @@ use std::{collections::HashMap, convert::TryInto, hash::Hash, time::{Duration, I
 
 use crate::animation::{Animation, Transition};
 use crate::color::Color;
-use crate::vertex::Vertex;
+use crate::font::Font;
+use crate::shaders::{FONT_VERTEX_SHADER, FONT_FRAGMENT_SHADER};
+use crate::vertex::{Vertex, FontVertex};
 
 pub struct Renderer<TTextureId: Hash + Eq> {
     /// this holds the current frame
@@ -23,6 +27,8 @@ pub struct Renderer<TTextureId: Hash + Eq> {
     frame_start: Instant,
     display: Display,
     program: Program,
+    font_program: Program,
+    font: Font,
     /// used for scaling the ui to the display
     viewport: (f32, f32),
     cursor: (f32, f32),
@@ -36,9 +42,12 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
     pub fn new(display: Display, program: Program) -> Self {
         let mut frame = display.draw();
         frame.set_finish().unwrap();
+        let font = Font::from_memory(&display, include_bytes!("../font.ttf"), 18);
         Self {
             frame,
             background_color: Color::new(0, 0, 0),
+            font,
+            font_program: Program::from_source(&display, FONT_VERTEX_SHADER, FONT_FRAGMENT_SHADER, None).unwrap(),
             display,
             frame_time: 0,
             frame_start: Instant::now(),
@@ -61,6 +70,10 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         }
 
         1_000_000_000 / self.frame_time
+    }
+
+    fn projection_matrix(&self) -> [[f32; 4]; 4] {
+        cgmath::ortho(0.0, self.viewport.0, self.viewport.1, 0.0, 0.0, 1.0).into()
     }
 
     pub fn set_background_color(&mut self, color: Color) {
@@ -119,16 +132,14 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         (vb, ib)
     }
 
-    fn draw_vertices(&mut self, vertices: &[Vertex], percentages: bool) {
+    fn draw_vertices(&mut self, vertices: &[Vertex]) {
         let (vb, ib) = self.setup_draw(vertices);
 
         let tex = Texture2d::empty(&self.display, 0, 0).unwrap();
-        let size = [self.viewport.0, self.viewport.1];
         let uniforms = uniform! {
-            size: size,
-            is_percentage: percentages,
             use_texture: false,
-            tex: &tex
+            tex: &tex,
+            projection: self.projection_matrix()
         };
 
         self.frame
@@ -150,10 +161,9 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         match self.textures.get(&texture_id).unwrap() {
             Texture::Image(tex) => {
                 let uniforms = uniform! {
-                    size: [self.viewport.0 / 100.0, self.viewport.1 / 100.0],
-                    is_percentage: false,
                     use_texture: true,
-                    tex: tex
+                    projection: self.projection_matrix(),
+                    tex: tex,
                 };
 
                 self.frame
@@ -161,6 +171,18 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
                     .unwrap();
             }
         }
+    }
+
+    pub fn move_cursor(&mut self, x: i32, y: i32, f: impl Fn(&mut Self)) {
+        let cursor_copy = self.cursor;
+        self.cursor.0 = if x < 0 {
+            self.width() + x as f32
+        } else { x as f32 };
+        self.cursor.1 = if y < 0 {
+            self.height() + y as f32
+        } else { y as f32 };
+        f(self);
+        self.cursor = cursor_copy;
     }
 
     pub fn clear(&mut self) {
@@ -173,8 +195,86 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         self.draw_texture((width, height), id);
         self.handle_new_shape(width, height);
     }
+    pub fn show_fps(&mut self) {
+        self.move_cursor(-80, 5, |r| {
+            r.text(&format!("{:4} fps", r.fps()));
+        });
+    }
 
-    pub fn text(&mut self, _value: &str) {}
+    pub fn text(&mut self, value: &str) {
+        let (mut x, y) = self.cursor;
+        let mut width = 0.0;
+        let mut height = 0.0;
+        let scale = 1.0;
+        let letter_spacing = -2.0;
+        let color = Color::BLACK;
+
+        let draw_params = DrawParameters {
+            blend: Blend::alpha_blending(),
+            ..Default::default()
+        };
+
+        for c in value.chars() {
+            let info = self.font.get_info(c).expect("The character is missing from the font");
+            let xpos = x + info.bearing.0 as f32 * scale;
+            let ypos = y + (info.size.1 - info.bearing.1) as f32 * scale + (self.font.size as f32 - info.size.1 as f32) * scale;
+            let w = info.size.0 as f32 * scale;
+            let h = info.size.1 as f32 * scale;
+            width += w;
+            if (ypos + h - y) > height {
+                height = ypos + h - y;
+            }
+            let uniforms = uniform! {
+                tex: &info.texture,
+                projection: self.projection_matrix(),
+            };
+            let vertices = &[
+                FontVertex {
+                    position: [xpos, ypos + h],
+                    tex_pos: [0.0, 1.0],
+                    color: color.into()
+                },
+                FontVertex {
+                    position: [xpos, ypos],
+                    tex_pos: [0.0, 0.0],
+                    color: color.into()
+                },
+                FontVertex {
+                    position: [xpos + w, ypos],
+                    tex_pos: [1.0, 0.0],
+                    color: color.into()
+                },
+                FontVertex {
+                    position: [xpos, ypos + h],
+                    tex_pos: [0.0, 1.0],
+                    color: color.into()
+                },
+                FontVertex {
+                    position: [xpos + w, ypos],
+                    tex_pos: [1.0, 0.0],
+                    color: color.into()
+                },
+                FontVertex {
+                    position: [xpos + w, ypos + h],
+                    tex_pos: [1.0, 1.0],
+                    color: color.into()
+                },
+            ];
+            // advance cursors for next glyph (note that advance is number of 1/64 pixels)
+            x += ((info.advance >> 6) as f32 + letter_spacing) * scale; // bitshift by 6 to get value in pixels (2^6 = 64)
+            let vb = VertexBuffer::new(&self.display, vertices).unwrap();
+            let ib = IndexBuffer::new(
+                &self.display,
+                PrimitiveType::TriangleStrip,
+                &(0..6).collect::<Vec<u16>>(),
+            )
+            .unwrap();
+            self.frame
+                .draw(&vb, &ib, &self.font_program, &uniforms, &draw_params)
+                .unwrap();
+        }
+        self.handle_new_shape(width, height);
+    }
 
     pub fn row(&mut self, f: impl Fn(&mut Self) -> ()) {
         self.layout_stack.push(Layout::Row {
@@ -262,8 +362,7 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
                 Vertex::colored(color, x, y + height),
                 Vertex::colored(color, x + width, y),
                 Vertex::colored(color, x + width, y + height),
-            ],
-            false,
+            ]
         );
 
         self.handle_new_shape(width, height);

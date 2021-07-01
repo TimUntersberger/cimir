@@ -32,3 +32,12 @@ impl Vertex {
         }
     }
 }
+
+#[derive(Copy, Clone, Debug)]
+pub struct FontVertex {
+    pub position: [f32; 2],
+    pub color: [f32; 3],
+    pub tex_pos: [f32; 2],
+}
+
+implement_vertex!(FontVertex, position, color, tex_pos);
