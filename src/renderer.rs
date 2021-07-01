@@ -173,7 +173,7 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         }
     }
 
-    pub fn move_cursor(&mut self, x: i32, y: i32, f: impl Fn(&mut Self)) {
+    pub fn set_cursor(&mut self, x: i32, y: i32, f: impl Fn(&mut Self)) {
         let cursor_copy = self.cursor;
         self.cursor.0 = if x < 0 {
             self.width() + x as f32
@@ -181,6 +181,14 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         self.cursor.1 = if y < 0 {
             self.height() + y as f32
         } else { y as f32 };
+        f(self);
+        self.cursor = cursor_copy;
+    }
+
+    pub fn move_cursor(&mut self, x: f32, y: f32, f: impl Fn(&mut Self)) {
+        let cursor_copy = self.cursor;
+        self.cursor.0 += x;
+        self.cursor.1 += y;
         f(self);
         self.cursor = cursor_copy;
     }
@@ -196,7 +204,7 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         self.handle_new_shape(width, height);
     }
     pub fn show_fps(&mut self) {
-        self.move_cursor(-80, 5, |r| {
+        self.set_cursor(-80, 0, |r| {
             r.text(&format!("{:4} fps", r.fps()));
         });
     }
