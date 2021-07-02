@@ -51,50 +51,29 @@ impl Application for App {
         r: &mut Renderer<Self::TextureId>,
     ) -> Option<ControlFlow> {
         match key {
-            VirtualKeyCode::Key1 => {
-                self.dark = !self.dark;
-                if self.dark {
-                    r.set_background_color(Color::new(51, 51, 51));
-                } else {
-                    r.set_background_color(Color::new(230, 230, 230));
-                }
-            }
-            VirtualKeyCode::Key2 => {
-                r.reset_animation(self.titlebar_animation_id);
-            }
+            VirtualKeyCode::A => {
+                dbg!(r.is_active(0));
+            },
             _ => {}
         }
         None
     }
 
     fn init(&mut self, r: &mut Renderer<Self::TextureId>) {
-        r.set_image(TextureId::Moon, "test.jpg");
+        r.set_image(TextureId::Moon, include_bytes!("../test.jpg"));
         r.set_background_color(Color::new(230, 230, 230));
     }
 
     fn render(&mut self, r: &mut Renderer<Self::TextureId>) {
-        let color = if self.dark {
-            Color::new(40, 40, 40)
-        } else {
-            Color::new(200, 200, 200)
-        };
-        r.animate(
-            self.titlebar_animation_id,
-            Duration::from_millis(500),
-            &[Transition::Linear(0.0, 40.0)],
-            |r, [height]| {
-                r.row(|r| {
-                    r.rectangle((r.remaining_width(), height), color);
-                });
-            },
-        );
-        r.show_fps();
+        r.texture(TextureId::Moon, (r.width(), r.height()));
+        // r.hitbox(0, |r| {
+        //     r.rectangle((20.0, 20.0), Color::BLACK);
+        // });
         // r.space(20.0);
-        // r.texture(TextureId::Moon, (800.0, 600.0));
     }
 }
 
 fn main() {
-    appbar::Appbar::new().run();
-    // App::new().run();
+    // appbar::Appbar::new().run();
+    App::new().run();
 }

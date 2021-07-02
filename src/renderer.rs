@@ -19,6 +19,35 @@ use crate::font::Font;
 use crate::shaders::{FONT_VERTEX_SHADER, FONT_FRAGMENT_SHADER};
 use crate::vertex::{Vertex, FontVertex};
 
+/// a hitbox is an area in the window that senses clicks/hovers/...
+#[derive(Debug, Copy, Clone)]
+pub struct Hitbox {
+    pub x: f32,
+    pub y: f32,
+    pub height: f32,
+    pub width: f32
+}
+
+impl Hitbox {
+    pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
+        Self {
+            x,
+            y,
+            height,
+            width
+        }
+    }
+
+    pub fn contains_pos(&self, x: f32, y: f32) -> bool {
+        let left = self.x;
+        let right = left + self.width;
+        let top = self.y;
+        let bottom = top + self.height;
+
+        (left <= x && x <= right) && (top <= y && y <= bottom)
+    }
+}
+
 pub struct Renderer<TTextureId: Hash + Eq> {
     /// this holds the current frame
     frame: Frame,
@@ -36,6 +65,10 @@ pub struct Renderer<TTextureId: Hash + Eq> {
     layout_stack: Vec<Layout>,
     animations: HashMap<u32, Animation>,
     textures: HashMap<TTextureId, Texture>,
+    pub(crate) active_id: Option<u32>,
+    pub(crate) hitboxes: HashMap<u32, Hitbox>,
+    /// the hitboxes the renderer is currently inside
+    hitbox_stack: Vec<Hitbox>
 }
 
 impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
@@ -59,9 +92,20 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
                 x: 0.0,
                 y: 0.0,
             }],
+            active_id: None,
             animations: HashMap::new(),
             textures: HashMap::new(),
+            hitboxes: HashMap::new(),
+            hitbox_stack: Vec::new()
         }
+    }
+
+    pub fn is_active(&self, id: u32) -> bool {
+        self.active_id.map(|aid| aid == id).unwrap_or(false)
+    }
+
+    pub(crate) fn clear_hitboxes(&mut self) {
+        self.hitboxes.clear();
     }
 
     pub fn fps(&self) -> u32 {
@@ -80,9 +124,10 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         self.background_color = color;
     }
 
-    pub fn set_image(&mut self, id: TTextureId, path: &str) {
+    pub fn set_image(&mut self, id: TTextureId, data: &[u8]) {
         let image = {
-            let image = image::io::Reader::open(path)
+            let image = image::io::Reader::new(std::io::Cursor::new(data))
+                .with_guessed_format()
                 .unwrap()
                 .decode()
                 .unwrap()
@@ -158,7 +203,7 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         ];
         let (vb, ib) = self.setup_draw(vertices);
 
-        match self.textures.get(&texture_id).unwrap() {
+        match self.textures.get(&texture_id).expect("Texture not found") {
             Texture::Image(tex) => {
                 let uniforms = uniform! {
                     use_texture: true,
@@ -203,19 +248,19 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         self.draw_texture((width, height), id);
         self.handle_new_shape(width, height);
     }
+
     pub fn show_fps(&mut self) {
         self.set_cursor(-80, 0, |r| {
-            r.text(&format!("{:4} fps", r.fps()));
+            r.text(&format!("{:4} fps", r.fps()), Color::BLACK);
         });
     }
 
-    pub fn text(&mut self, value: &str) {
+    pub fn text(&mut self, value: &str, color: Color) {
         let (mut x, y) = self.cursor;
         let mut width = 0.0;
         let mut height = 0.0;
         let scale = 1.0;
         let letter_spacing = -2.0;
-        let color = Color::BLACK;
 
         let draw_params = DrawParameters {
             blend: Blend::alpha_blending(),
@@ -282,6 +327,7 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
                 .unwrap();
         }
         self.handle_new_shape(width, height);
+
     }
 
     pub fn row(&mut self, f: impl Fn(&mut Self) -> ()) {
@@ -330,6 +376,12 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         f(self, result.try_into().unwrap());
     }
 
+    pub fn hitbox(&mut self, id: u32, f: impl Fn(&mut Self) -> ()) {
+        self.hitbox_stack.push(Hitbox::new(self.cursor.0, self.cursor.1, 0.0, 0.0));
+        f(self);
+        self.hitboxes.insert(id, self.hitbox_stack.pop().unwrap());
+    }
+
     fn handle_new_shape(&mut self, shape_width: f32, shape_height: f32) {
         match self.layout_stack.iter_mut().last().unwrap() {
             Layout::Row { height, .. } => {
@@ -343,6 +395,19 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
                 if shape_width > *width {
                     *width = shape_width;
                 }
+            }
+        };
+
+        if let Some(hitbox) = self.hitbox_stack.iter_mut().last() {
+            let width = shape_width;//self.cursor.0 - hitbox.x;
+            let height = shape_height;//self.cursor.1 - hitbox.y;
+
+            if width > hitbox.width {
+                hitbox.width = width;
+            }
+
+            if height > hitbox.height {
+                hitbox.height = height;
             }
         }
     }

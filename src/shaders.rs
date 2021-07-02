@@ -30,7 +30,7 @@ in vec2 vertex_tex_pos;
 void main()
 {
     if (use_texture) {
-        FragColor = texture(tex, vertex_tex_pos) * vertex_color;
+        FragColor = texture(tex, vertex_tex_pos);
     } else {
         FragColor = vertex_color;
     }

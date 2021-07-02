@@ -65,7 +65,7 @@ impl Application for Appbar {
 impl Appbar {
     fn render_datetime(&self, r: &mut Renderer<u32>, fmt: &str) {
         r.move_cursor(0.0, -2.0, |r| {
-            r.text(&Local::now().format(fmt).to_string());
+            r.text(&Local::now().format(fmt).to_string(), Color::BLACK);
         });
     }
 
@@ -76,7 +76,7 @@ impl Appbar {
         }
         r.rectangle((20.0, r.height()), color);
         r.move_cursor(-15.0, -2.0, |r| {
-            r.text(&id.to_string());
+            r.text(&id.to_string(), Color::BLACK);
         });
     }
 }
