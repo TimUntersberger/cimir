@@ -1,11 +1,9 @@
 pub use winit;
 
 use winit::{
-    event::{Event, VirtualKeyCode, WindowEvent},
+    event::VirtualKeyCode,
     event_loop::ControlFlow,
 };
-
-use std::{hash::Hash, time::Duration};
 
 use crate::application::ApplicationWrapper;
 use crate::renderer::Renderer;
@@ -22,20 +20,17 @@ mod vertex;
 mod primitives;
 mod styling;
 
-use animation::{Animation, Transition};
 use application::Application;
 use color::Color;
 
 struct App {
-    dark: bool,
-    titlebar_animation_id: u32,
+    value: String
 }
 
 impl App {
     pub fn new() -> Self {
         Self {
-            dark: false,
-            titlebar_animation_id: 0,
+            value: "".into()
         }
     }
 }
@@ -48,9 +43,27 @@ impl Application for App {
         key: VirtualKeyCode,
         r: &mut Renderer<Self::TextureId>,
     ) -> Option<ControlFlow> {
+        if r.is_active(0) {
+            match key {
+                VirtualKeyCode::LShift
+                | VirtualKeyCode::LControl => {},
+                VirtualKeyCode::Back => {
+                    self.value.pop();
+                },
+                VirtualKeyCode::Space => {
+                    self.value.push(' ');
+                },
+                key => {
+                    self.value = format!("{}{:?}", self.value, key);
+                }
+            }
+        }
         match key {
-            VirtualKeyCode::A => {
-                dbg!(r.is_active(0));
+            VirtualKeyCode::F1 => {
+                r.change_font_size(30);
+            },
+            VirtualKeyCode::F2 => {
+                r.change_font_size(18);
             },
             _ => {}
         }
@@ -67,9 +80,14 @@ impl Application for App {
             r.space(10.0);
             r.hitbox(0, |r, active| {
                 if active { 
-                    r.label("Click me!", HoveredCustomStyle);
+                    let (_, y) = r.pos();
+                    let (_, height, text_end_x) = r.label(&self.value, HoveredCustomStyle);
+                    let cursor_height = r.font.size as f32;
+                    r.set_cursor(text_end_x + 2.0, y + (height - cursor_height) / 2.0, |r| {
+                        r.rectangle((1.5, cursor_height), Color::BLACK);
+                    });
                 } else { 
-                    r.label("Click me!", CustomStyle);
+                    r.label(&self.value, CustomStyle);
                 };
             });
         });
@@ -83,9 +101,10 @@ struct CustomStyle;
 impl Into<LabelStyle> for CustomStyle {
     fn into(self) -> LabelStyle {
         LabelStyle {
-            padding: 20.0.into(),
-            foreground_color: Color::WHITE,
-            background_color: Some(Color::BLACK),
+            padding: (5.0, 3.0).into(),
+            min_width: 200.0,
+            foreground_color: Color::BLACK,
+            background_color: Some(Color::new(180, 180, 180)),
             ..Default::default()
         }
     }
@@ -94,7 +113,7 @@ impl Into<LabelStyle> for CustomStyle {
 impl Into<LabelStyle> for HoveredCustomStyle {
     fn into(self) -> LabelStyle {
         LabelStyle {
-            background_color: Some(Color::new(5, 5, 5)),
+            background_color: Some(Color::new(140, 140, 140)),
             ..CustomStyle.into()
         }
     }

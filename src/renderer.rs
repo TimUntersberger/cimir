@@ -100,6 +100,10 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         }
     }
 
+    pub fn change_font_size(&mut self, size: u32) {
+        self.font = Font::from_memory(&self.display, include_bytes!("../font.ttf"), size);
+    }
+
     pub fn pos(&self) -> (f32, f32) {
         self.cursor
     }

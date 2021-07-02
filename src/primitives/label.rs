@@ -6,7 +6,8 @@ use crate::renderer::Renderer;
 pub struct LabelStyle {
     pub background_color: Option<Color>,
     pub foreground_color: Color,
-    pub padding: Padding
+    pub padding: Padding,
+    pub min_width: f32
 }
 
 impl Default for LabelStyle {
@@ -14,7 +15,8 @@ impl Default for LabelStyle {
         Self {
             background_color: None,
             foreground_color: Color::BLACK,
-            padding: 0.0.into()
+            padding: 0.0.into(),
+            min_width: 0.0
         }
     }
 }
@@ -26,7 +28,7 @@ impl Into<LabelStyle> for () {
 }
 
 impl<TextureId: std::hash::Hash + Eq> Renderer<TextureId> {
-    pub fn label<T: Into<LabelStyle>>(&mut self, text: &str, style: T) {
+    pub fn label<T: Into<LabelStyle>>(&mut self, text: &str, style: T) -> (f32, f32, f32) {
         let style = style.into();
 
         // This is needed to more correctly position the text vertically.
@@ -34,12 +36,16 @@ impl<TextureId: std::hash::Hash + Eq> Renderer<TextureId> {
         let font_sorcery = 2.0;
         let (x, y) = self.pos();
         let (width, height) = self.calculate_text_size(text);
-        let rect_width = width + style.padding.left + style.padding.right;
+        let rect_width = width.max(style.min_width) + style.padding.left + style.padding.right;
         let rect_height = height + style.padding.top + style.padding.bottom - font_sorcery * 1.5;
+        let text_x = x + style.padding.left;
+        let text_y = y + style.padding.top - font_sorcery * 2.0;
         self.rectangle((rect_width, rect_height), style.background_color.unwrap_or(self.background_color));
-        self.set_cursor(x + style.padding.left, y + style.padding.top - font_sorcery * 2.0, |r| {
+        self.set_cursor(text_x, text_y, |r| {
             r.text(text, style.foreground_color);
         });
+
+        (rect_width, rect_height, text_x + width)
     }
 
 }
