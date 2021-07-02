@@ -9,6 +9,7 @@ use std::{hash::Hash, time::Duration};
 
 use crate::application::ApplicationWrapper;
 use crate::renderer::Renderer;
+use crate::primitives::LabelStyle;
 
 mod animation;
 mod appbar;
@@ -18,6 +19,8 @@ mod font;
 mod renderer;
 mod shaders;
 mod vertex;
+mod primitives;
+mod styling;
 
 use animation::{Animation, Transition};
 use application::Application;
@@ -37,13 +40,8 @@ impl App {
     }
 }
 
-#[derive(Copy, Clone, Hash, PartialEq, Eq)]
-enum TextureId {
-    Moon,
-}
-
 impl Application for App {
-    type TextureId = TextureId;
+    type TextureId = u32;
 
     fn on_key_down(
         &mut self,
@@ -60,16 +58,45 @@ impl Application for App {
     }
 
     fn init(&mut self, r: &mut Renderer<Self::TextureId>) {
-        r.set_image(TextureId::Moon, include_bytes!("../test.jpg"));
         r.set_background_color(Color::new(230, 230, 230));
     }
 
     fn render(&mut self, r: &mut Renderer<Self::TextureId>) {
-        r.texture(TextureId::Moon, (r.width(), r.height()));
-        // r.hitbox(0, |r| {
-        //     r.rectangle((20.0, 20.0), Color::BLACK);
-        // });
-        // r.space(20.0);
+        r.space(10.0);
+        r.row(|r| {
+            r.space(10.0);
+            r.hitbox(0, |r, active| {
+                if active { 
+                    r.label("Click me!", HoveredCustomStyle);
+                } else { 
+                    r.label("Click me!", CustomStyle);
+                };
+            });
+        });
+        r.show_fps();
+    }
+}
+
+struct HoveredCustomStyle;
+struct CustomStyle;
+
+impl Into<LabelStyle> for CustomStyle {
+    fn into(self) -> LabelStyle {
+        LabelStyle {
+            padding: 20.0.into(),
+            foreground_color: Color::WHITE,
+            background_color: Some(Color::BLACK),
+            ..Default::default()
+        }
+    }
+}
+
+impl Into<LabelStyle> for HoveredCustomStyle {
+    fn into(self) -> LabelStyle {
+        LabelStyle {
+            background_color: Some(Color::new(5, 5, 5)),
+            ..CustomStyle.into()
+        }
     }
 }
 

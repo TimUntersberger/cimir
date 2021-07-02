@@ -57,11 +57,11 @@ pub struct Renderer<TTextureId: Hash + Eq> {
     display: Display,
     program: Program,
     font_program: Program,
-    font: Font,
+    pub font: Font,
     /// used for scaling the ui to the display
     viewport: (f32, f32),
     cursor: (f32, f32),
-    background_color: Color,
+    pub background_color: Color,
     layout_stack: Vec<Layout>,
     animations: HashMap<u32, Animation>,
     textures: HashMap<TTextureId, Texture>,
@@ -98,6 +98,10 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
             hitboxes: HashMap::new(),
             hitbox_stack: Vec::new()
         }
+    }
+
+    pub fn pos(&self) -> (f32, f32) {
+        self.cursor
     }
 
     pub fn is_active(&self, id: u32) -> bool {
@@ -218,12 +222,12 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         }
     }
 
-    pub fn set_cursor(&mut self, x: i32, y: i32, f: impl Fn(&mut Self)) {
+    pub fn set_cursor(&mut self, x: f32, y: f32, f: impl Fn(&mut Self)) {
         let cursor_copy = self.cursor;
-        self.cursor.0 = if x < 0 {
+        self.cursor.0 = if x < 0.0 {
             self.width() + x as f32
         } else { x as f32 };
-        self.cursor.1 = if y < 0 {
+        self.cursor.1 = if y < 0.0 {
             self.height() + y as f32
         } else { y as f32 };
         f(self);
@@ -250,9 +254,25 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
     }
 
     pub fn show_fps(&mut self) {
-        self.set_cursor(-80, 0, |r| {
+        self.set_cursor(-80.0, 0.0, |r| {
             r.text(&format!("{:4} fps", r.fps()), Color::BLACK);
         });
+    }
+
+    pub fn calculate_text_size(&self, text: &str) -> (f32, f32) {
+        let mut x = 0.0;
+        let mut width = 0.0;
+        let height = self.font.size as f32;
+        let scale = 1.0;
+
+        for c in text.chars() {
+            let info = self.font.get_info(c).expect("The character is missing from the font");
+            let old_x = x;
+            x += ((info.advance >> 6) as f32) * scale; // bitshift by 6 to get value in pixels (2^6 = 64)
+            width += x - old_x;
+        }
+
+        (width, height)
     }
 
     pub fn text(&mut self, value: &str, color: Color) {
@@ -260,7 +280,6 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         let mut width = 0.0;
         let mut height = 0.0;
         let scale = 1.0;
-        let letter_spacing = -2.0;
 
         let draw_params = DrawParameters {
             blend: Blend::alpha_blending(),
@@ -273,7 +292,6 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
             let ypos = y + (info.size.1 - info.bearing.1) as f32 * scale + (self.font.size as f32 - info.size.1 as f32) * scale;
             let w = info.size.0 as f32 * scale;
             let h = info.size.1 as f32 * scale;
-            width += w;
             if (ypos + h - y) > height {
                 height = ypos + h - y;
             }
@@ -313,8 +331,10 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
                     color: color.into()
                 },
             ];
+            let old_x = x;
             // advance cursors for next glyph (note that advance is number of 1/64 pixels)
-            x += ((info.advance >> 6) as f32 + letter_spacing) * scale; // bitshift by 6 to get value in pixels (2^6 = 64)
+            x += ((info.advance >> 6) as f32) * scale; // bitshift by 6 to get value in pixels (2^6 = 64)
+            width += x - old_x;
             let vb = VertexBuffer::new(&self.display, vertices).unwrap();
             let ib = IndexBuffer::new(
                 &self.display,
@@ -376,9 +396,10 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         f(self, result.try_into().unwrap());
     }
 
-    pub fn hitbox(&mut self, id: u32, f: impl Fn(&mut Self) -> ()) {
+    pub fn hitbox(&mut self, id: u32, f: impl Fn(&mut Self, bool) -> ()) {
+        let is_active = self.is_active(id);
         self.hitbox_stack.push(Hitbox::new(self.cursor.0, self.cursor.1, 0.0, 0.0));
-        f(self);
+        f(self, is_active);
         self.hitboxes.insert(id, self.hitbox_stack.pop().unwrap());
     }
 
