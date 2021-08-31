@@ -1,5 +1,5 @@
 pub use winit::{
-    event::{Event, VirtualKeyCode, WindowEvent},
+    event::{Event, VirtualKeyCode, WindowEvent, ModifiersState},
     event_loop::ControlFlow,
 };
 
@@ -11,13 +11,22 @@ use glium::{
     uniform, Display, Frame, IndexBuffer, Program, Surface, VertexBuffer,
 };
 
-use std::{collections::HashMap, convert::TryInto, hash::Hash, time::{Duration, Instant}};
+use std::{collections::HashMap, convert::TryInto, time::{Duration, Instant}};
 
 use crate::animation::{Animation, Transition};
 use crate::color::Color;
 use crate::font::Font;
+use crate::key::Key;
 use crate::shaders::{FONT_VERTEX_SHADER, FONT_FRAGMENT_SHADER};
 use crate::vertex::{Vertex, FontVertex};
+
+#[derive(Debug, Copy, Clone)]
+pub struct MouseInfo {
+    pub x: f64,
+    pub y: f64,
+    pub lmouseclick: bool,
+    pub rmouseclick: bool
+}
 
 /// a hitbox is an area in the window that senses clicks/hovers/...
 #[derive(Debug, Copy, Clone)]
@@ -48,7 +57,7 @@ impl Hitbox {
     }
 }
 
-pub struct Renderer<TTextureId: Hash + Eq> {
+pub struct Renderer {
     /// this holds the current frame
     frame: Frame,
     /// how long the last frame took to render in nanoseconds
@@ -57,6 +66,7 @@ pub struct Renderer<TTextureId: Hash + Eq> {
     display: Display,
     program: Program,
     font_program: Program,
+    pub modifiers: ModifiersState,
     pub font: Font,
     /// used for scaling the ui to the display
     viewport: (f32, f32),
@@ -64,22 +74,38 @@ pub struct Renderer<TTextureId: Hash + Eq> {
     pub background_color: Color,
     layout_stack: Vec<Layout>,
     animations: HashMap<u32, Animation>,
-    textures: HashMap<TTextureId, Texture>,
-    pub(crate) active_id: Option<u32>,
+    textures: HashMap<u32, Texture>,
+    /// holds the current mouse information
+    pub mouse: MouseInfo,
+    /// holds the characters that were input between the last render and current render
+    pub input: Vec<char>,
+    /// holds the virtual keys that were pressed between the last render and current render
+    pub keys: Vec<Key>,
+    pub active_id: Option<u32>,
+    pub hot_id: Option<u32>,
     pub(crate) hitboxes: HashMap<u32, Hitbox>,
     /// the hitboxes the renderer is currently inside
     hitbox_stack: Vec<Hitbox>
 }
 
-impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
+impl Renderer {
     pub fn new(display: Display, program: Program) -> Self {
         let mut frame = display.draw();
         frame.set_finish().unwrap();
         let font = Font::from_memory(&display, include_bytes!("../font.ttf"), 18);
         Self {
             frame,
+            modifiers: Default::default(),
             background_color: Color::new(0, 0, 0),
             font,
+            keys: Vec::new(),
+            mouse: MouseInfo {
+                x: 0.0,
+                y: 0.0,
+                lmouseclick: false,
+                rmouseclick: false,
+            },
+            input: Vec::new(),
             font_program: Program::from_source(&display, FONT_VERTEX_SHADER, FONT_FRAGMENT_SHADER, None).unwrap(),
             display,
             frame_time: 0,
@@ -93,6 +119,7 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
                 y: 0.0,
             }],
             active_id: None,
+            hot_id: None,
             animations: HashMap::new(),
             textures: HashMap::new(),
             hitboxes: HashMap::new(),
@@ -110,6 +137,10 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
 
     pub fn is_active(&self, id: u32) -> bool {
         self.active_id.map(|aid| aid == id).unwrap_or(false)
+    }
+
+    pub fn is_hot(&self, id: u32) -> bool {
+        self.hot_id.map(|aid| aid == id).unwrap_or(false)
     }
 
     pub(crate) fn clear_hitboxes(&mut self) {
@@ -132,7 +163,7 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         self.background_color = color;
     }
 
-    pub fn set_image(&mut self, id: TTextureId, data: &[u8]) {
+    pub fn set_image(&mut self, id: u32, data: &[u8]) {
         let image = {
             let image = image::io::Reader::new(std::io::Cursor::new(data))
                 .with_guessed_format()
@@ -200,7 +231,7 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
             .unwrap();
     }
 
-    fn draw_texture(&mut self, size: (f32, f32), texture_id: TTextureId) {
+    fn draw_texture(&mut self, size: (f32, f32), texture_id: u32) {
         let (x, y) = self.cursor;
         let (width, height) = size;
         let vertices = &[
@@ -226,7 +257,7 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         }
     }
 
-    pub fn set_cursor(&mut self, x: f32, y: f32, f: impl Fn(&mut Self)) {
+    pub fn set_cursor(&mut self, x: f32, y: f32, mut f: impl FnMut(&mut Self)) {
         let cursor_copy = self.cursor;
         self.cursor.0 = if x < 0.0 {
             self.width() + x as f32
@@ -238,7 +269,7 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         self.cursor = cursor_copy;
     }
 
-    pub fn move_cursor(&mut self, x: f32, y: f32, f: impl Fn(&mut Self)) {
+    pub fn move_cursor(&mut self, x: f32, y: f32, mut f: impl FnMut(&mut Self)) {
         let cursor_copy = self.cursor;
         self.cursor.0 += x;
         self.cursor.1 += y;
@@ -251,7 +282,7 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         self.frame.clear_color(c[0], c[1], c[2], 1.0);
     }
 
-    pub fn texture(&mut self, id: TTextureId, size: (f32, f32)) {
+    pub fn texture(&mut self, id: u32, size: (f32, f32)) {
         let (width, height) = size;
         self.draw_texture((width, height), id);
         self.handle_new_shape(width, height);
@@ -354,7 +385,7 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
 
     }
 
-    pub fn row(&mut self, f: impl Fn(&mut Self) -> ()) {
+    pub fn row(&mut self, mut f: impl FnMut(&mut Self) -> ()) {
         self.layout_stack.push(Layout::Row {
             height: 0.0,
             x: self.cursor.0,
@@ -367,7 +398,7 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         }
     }
 
-    pub fn col(&mut self, f: impl Fn(&mut Self) -> ()) {
+    pub fn col(&mut self, mut f: impl FnMut(&mut Self) -> ()) {
         self.layout_stack.push(Layout::Col {
             width: 0.0,
             x: self.cursor.0,
@@ -385,7 +416,7 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         id: u32,
         duration: Duration,
         transitions: &[Transition; N],
-        f: impl Fn(&mut Self, [f32; N]) -> (),
+        mut f: impl FnMut(&mut Self, [f32; N]) -> (),
     ) {
         let result = match self.animations.get_mut(&id) {
             Some(animation) => animation.animate(),
@@ -400,10 +431,18 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         f(self, result.try_into().unwrap());
     }
 
-    pub fn hitbox(&mut self, id: u32, f: impl Fn(&mut Self, bool) -> ()) {
+    pub fn get_hit(&self, x: f32, y: f32) -> Option<u32> {
+        self.hitboxes
+            .iter()
+            .find(|(_, hb)| hb.contains_pos(x, y))
+            .map(|(id, _)| *id)
+    }
+
+    pub fn hitbox(&mut self, id: u32, mut f: impl FnMut(&mut Self, bool, bool) -> ()) {
+        let is_hot = self.is_hot(id);
         let is_active = self.is_active(id);
         self.hitbox_stack.push(Hitbox::new(self.cursor.0, self.cursor.1, 0.0, 0.0));
-        f(self, is_active);
+        f(self, is_hot, is_active);
         self.hitboxes.insert(id, self.hitbox_stack.pop().unwrap());
     }
 
@@ -466,6 +505,14 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
         self.handle_new_shape(width, height);
     }
 
+    pub fn consume_input(&mut self) -> Vec<char> {
+        std::mem::take(&mut self.input)
+    }
+
+    pub fn consume_keys(&mut self) -> Vec<Key> {
+        std::mem::take(&mut self.keys)
+    }
+
     pub(crate) fn next_frame(&mut self) {
         self.reset_cursor();
         self.viewport = self.get_viewport();
@@ -476,6 +523,8 @@ impl<TTextureId: Hash + Eq> Renderer<TTextureId> {
     pub(crate) fn done(&mut self) {
         self.frame.set_finish().unwrap();
         self.frame_time = self.frame_start.elapsed().as_nanos() as u32;
+        self.input.clear();
+        self.keys.clear();
     }
 }
 

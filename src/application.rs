@@ -10,67 +10,72 @@ use glium::{glutin::ContextBuilder, Display, Program};
 use std::hash::Hash;
 
 use crate::renderer::Renderer;
+use crate::key::Key;
 use crate::shaders::{FRAGMENT_SHADER, VERTEX_SHADER};
 
 /// Used for debugging
 const RENDER_ONCE: bool = false;
 
 pub trait Application {
-    type TextureId: Eq + Hash;
-
-    fn init(&mut self, _renderer: &mut Renderer<Self::TextureId>) {}
-    fn render(&mut self, renderer: &mut Renderer<Self::TextureId>);
+    fn init(&mut self, _renderer: &mut Renderer) {}
+    fn render(&mut self, renderer: &mut Renderer);
     fn window(&mut self, w: WindowBuilder) -> WindowBuilder {
         w
     }
     fn on_event(
         &mut self,
         _event: Event<()>,
-        _r: &mut Renderer<Self::TextureId>,
+        _r: &mut Renderer,
+    ) -> Option<ControlFlow> {
+        None
+    }
+    fn on_text_input(
+        &mut self,
+        _c: char,
+        _r: &mut Renderer,
     ) -> Option<ControlFlow> {
         None
     }
     fn on_key_down(
         &mut self,
-        _key: VirtualKeyCode,
-        _r: &mut Renderer<Self::TextureId>,
+        _key: Key,
+        _r: &mut Renderer,
     ) -> Option<ControlFlow> {
         None
     }
     fn on_key_up(
         &mut self,
-        _key: VirtualKeyCode,
-        _r: &mut Renderer<Self::TextureId>,
+        _key: Key,
+        _r: &mut Renderer,
+    ) -> Option<ControlFlow> {
+        None
+    }
+    fn on_mouse_down(
+        &mut self,
+        _left: bool,
+        _x: f32,
+        _y: f32,
+        _r: &mut Renderer,
     ) -> Option<ControlFlow> {
         None
     }
 }
 
-pub struct MouseInfo {
-    pub x: f64,
-    pub y: f64,
-    pub lmouseclick: bool,
-    pub rmouseclick: bool
-}
-
 pub trait ApplicationWrapper<T: Application> {
     fn run(self);
-    fn call_render(&mut self, renderer: &mut Renderer<T::TextureId>, mouse: &mut MouseInfo);
+    fn call_render(&mut self, renderer: &mut Renderer);
 }
 
 impl<T: 'static> ApplicationWrapper<T> for T
 where
     T: Application,
 {
-    fn call_render(&mut self, renderer: &mut Renderer<T::TextureId>, mouse: &mut MouseInfo) {
+    fn call_render(&mut self, renderer: &mut Renderer) {
         renderer.clear();
         renderer.next_frame();
-        renderer.active_id = renderer.hitboxes
-            .iter()
-            .find(|(_, hb)| hb.contains_pos(mouse.x as f32, mouse.y as f32))
-            .map(|(id, _)| *id);
-        mouse.lmouseclick = false;
-        mouse.rmouseclick = false;
+        renderer.hot_id = renderer.get_hit(renderer.mouse.x as f32, renderer.mouse.y as f32);
+        renderer.mouse.lmouseclick = false;
+        renderer.mouse.rmouseclick = false;
         renderer.clear_hitboxes();
         self.render(renderer);
         renderer.done();
@@ -82,17 +87,12 @@ where
         let cb = ContextBuilder::new();
         let display = Display::new(wb, cb, &ev).unwrap();
         let program = Program::from_source(&display, VERTEX_SHADER, FRAGMENT_SHADER, None).unwrap();
-        let mut mouse_info = MouseInfo {
-            x: 0.0,
-            y: 0.0,
-            lmouseclick: false,
-            rmouseclick: false,
-        };
+
         let mut renderer = Renderer::new(display, program);
 
         self.init(&mut renderer);
         if RENDER_ONCE {
-            self.call_render(&mut renderer, &mut mouse_info);
+            self.call_render(&mut renderer);
         }
 
         ev.run(move |event, _, control_flow| {
@@ -101,30 +101,54 @@ where
                     WindowEvent::CloseRequested => ControlFlow::Exit,
                     WindowEvent::Resized(..) => ControlFlow::Poll,
                     WindowEvent::CursorMoved { position, .. } => {
-                        mouse_info.x = position.x;
-                        mouse_info.y = position.y;
+                        renderer.mouse.x = position.x;
+                        renderer.mouse.y = position.y;
                         ControlFlow::Poll
                     },
                     WindowEvent::MouseInput { state, button, .. } => {
                         match (state, button) {
-                            (ElementState::Released, MouseButton::Left) => mouse_info.lmouseclick = true,
-                            (ElementState::Released, MouseButton::Right) => mouse_info.lmouseclick = true,
-                            _ => {}
-                        };
+                            (ElementState::Released, MouseButton::Left) => {
+                                renderer.mouse.lmouseclick = true;
+                                ControlFlow::Poll
+                            },
+                            (ElementState::Released, MouseButton::Right) => {
+                                renderer.mouse.lmouseclick = true;
+                                ControlFlow::Poll
+                            },
+                            (ElementState::Pressed, mb) => self.on_mouse_down(
+                                *mb == MouseButton::Left, 
+                                renderer.mouse.x as f32, 
+                                renderer.mouse.y as f32, 
+                                &mut renderer
+                            ).unwrap_or(ControlFlow::Poll),
+                            _ => ControlFlow::Poll
+                        }
+                    },
+                    WindowEvent::ModifiersChanged(state) => {
+                        renderer.modifiers = *state;
                         ControlFlow::Poll
                     },
-                    WindowEvent::KeyboardInput { input, .. } => input
-                        .virtual_keycode
-                        .and_then(|key| match input.state {
-                            ElementState::Pressed => self.on_key_down(key, &mut renderer),
-                            ElementState::Released => self.on_key_up(key, &mut renderer),
+                    WindowEvent::ReceivedCharacter(c) => {
+                        renderer.input.push(*c);
+                        self.on_text_input(*c, &mut renderer).unwrap_or(ControlFlow::Poll)
+                    },
+                    WindowEvent::KeyboardInput { input, .. } => {
+                        input.virtual_keycode.map(Key::from).and_then(|key| {
+                            match input.state {
+                                ElementState::Pressed => {
+                                    renderer.keys.push(key);
+                                    self.on_key_down(key, &mut renderer)
+                                },
+                                ElementState::Released => self.on_key_up(key, &mut renderer),
+                            }
                         })
-                        .unwrap_or(ControlFlow::Poll),
+                        .unwrap_or(ControlFlow::Poll)
+                    }
                     _ => ControlFlow::Poll,
                 },
                 Event::MainEventsCleared => {
                     if !RENDER_ONCE {
-                        self.call_render(&mut renderer, &mut mouse_info);
+                        self.call_render(&mut renderer);
                     }
                     ControlFlow::Poll
                 }

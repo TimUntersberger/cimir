@@ -27,7 +27,7 @@ impl Into<LabelStyle> for () {
     }
 }
 
-impl<TextureId: std::hash::Hash + Eq> Renderer<TextureId> {
+impl Renderer {
     pub fn label<T: Into<LabelStyle>>(&mut self, text: &str, style: T) -> (f32, f32, f32) {
         let style = style.into();
 

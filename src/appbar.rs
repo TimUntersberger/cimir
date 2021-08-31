@@ -1,9 +1,9 @@
 use crate::{
     color::Color,
+    key::Key,
     renderer::Renderer,
     winit::{
         dpi::{LogicalPosition, LogicalSize},
-        event::VirtualKeyCode,
         window::WindowBuilder,
         event_loop::ControlFlow
     },
@@ -25,8 +25,6 @@ impl Appbar {
 }
 
 impl Application for Appbar {
-    type TextureId = u32;
-
     fn window(&mut self, w: WindowBuilder) -> WindowBuilder {
         w.with_decorations(false)
             .with_position(LogicalPosition::new(0.0, 0.0))
@@ -34,21 +32,21 @@ impl Application for Appbar {
             .with_always_on_top(true)
     }
 
-    fn on_key_down(&mut self, key: VirtualKeyCode, r: &mut Renderer<Self::TextureId>) -> Option<ControlFlow> {
+    fn on_key_down(&mut self, key: Key, r: &mut Renderer) -> Option<ControlFlow> {
         match key {
-            VirtualKeyCode::Key1 => self.active_ws = 1,
-            VirtualKeyCode::Key2 => self.active_ws = 2,
-            VirtualKeyCode::Key3 => self.active_ws = 3,
+            Key::One => self.active_ws = 1,
+            Key::Two => self.active_ws = 2,
+            Key::Three => self.active_ws = 3,
             _ => {}
         }
         None
     }
 
-    fn init(&mut self, r: &mut crate::Renderer<Self::TextureId>) {
+    fn init(&mut self, r: &mut Renderer) {
         r.set_background_color(Color::new(230, 230, 230));
     }
 
-    fn render(&mut self, r: &mut crate::Renderer<Self::TextureId>) {
+    fn render(&mut self, r: &mut Renderer) {
         r.row(|r| {
             for i in 1..4 {
                 self.render_ws(r, i);
@@ -63,13 +61,13 @@ impl Application for Appbar {
 }
 
 impl Appbar {
-    fn render_datetime(&self, r: &mut Renderer<u32>, fmt: &str) {
+    fn render_datetime(&self, r: &mut Renderer, fmt: &str) {
         r.move_cursor(0.0, -2.0, |r| {
             r.text(&Local::now().format(fmt).to_string(), Color::BLACK);
         });
     }
 
-    fn render_ws(&self, r: &mut Renderer<u32>, id: usize) {
+    fn render_ws(&self, r: &mut Renderer, id: usize) {
         let mut color = Color::new(210, 210, 210);
         if id == self.active_ws {
             color = Color::new(180, 180, 180);
